@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 )
 
 var normalErrMsgs []string = []string{

@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"veo/internal/core/config"
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 )
 
 // extractHost 从主机字符串中提取主机名（去除端口）

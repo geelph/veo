@@ -13,11 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
-	"veo/internal/utils/formatter"
-	"veo/internal/utils/redirect"
-	"veo/internal/utils/shared"
+	"veo/pkg/utils/formatter"
+	"veo/pkg/utils/interfaces"
+	"veo/pkg/utils/logger"
+	"veo/pkg/utils/redirect"
+	"veo/pkg/utils/shared"
 
 	"gopkg.in/yaml.v3"
 )
@@ -291,6 +291,9 @@ func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient in
 
 		// 使用统一的输出方法（消除重复代码）
 		e.outputFingerprintMatches(matches, response, "")
+	} else {
+		// 没有匹配到指纹时，输出基本信息（标题+状态码）
+		e.outputNoMatchInfo(response)
 	}
 
 	if fetcher, ok := httpClient.(redirect.HTTPFetcher); ok {
@@ -812,6 +815,34 @@ func (e *Engine) getIconHash(iconURL string, httpClient interface{}) (string, er
 		// httpClient不支持MakeRequest方法
 		logger.Debugf("HTTP客户端不支持MakeRequest方法，跳过图标请求: %s", iconURL)
 		return "", fmt.Errorf("HTTP客户端不支持MakeRequest方法")
+	}
+}
+
+// outputNoMatchInfo 输出无指纹匹配时的默认信息（URL、标题、状态码）
+func (e *Engine) outputNoMatchInfo(response *HTTPResponse) {
+	if !e.config.LogMatches {
+		return
+	}
+
+	// 生成细粒度缓存键（无指纹）
+	cacheKey := e.generateFingerprintCacheKey(response.URL, nil)
+
+	// 使用优化的检查-标记方法
+	if e.checkAndMarkFingerprint(cacheKey) {
+		var logMsg strings.Builder
+		logMsg.WriteString(formatter.FormatURL(response.URL))
+		logMsg.WriteString(" ")
+
+		title := response.Title
+		if title == "" {
+			title = "无标题"
+		}
+		logMsg.WriteString(formatter.FormatTitle(title))
+
+		logMsg.WriteString(" ")
+		logMsg.WriteString(formatter.FormatStatusCode(response.StatusCode))
+
+		logger.Info(logMsg.String())
 	}
 }
 

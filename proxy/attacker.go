@@ -9,8 +9,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"veo/internal/core/logger"
-	"veo/internal/utils/formatter"
+	"veo/pkg/utils/logger"
+	"veo/pkg/utils/formatter"
 
 	"github.com/lqqyt2423/go-mitmproxy/cert"
 	"golang.org/x/net/http2"

@@ -4,7 +4,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 
 	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding/simplifiedchinese"

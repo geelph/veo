@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
-	"veo/internal/core/types"
+	"veo/pkg/utils/interfaces"
+	"veo/pkg/utils/logger"
+	"veo/pkg/types"
 
 	"github.com/xuri/excelize/v2"
 )

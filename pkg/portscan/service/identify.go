@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"veo/internal/core/logger"
 	"veo/pkg/types"
+	"veo/pkg/utils/logger"
 )
 
 // Options 控制服务识别的并发与超时
@@ -136,7 +136,7 @@ func detectService(ip net.IP, port int, timeout time.Duration) string {
 	if ip == nil || port <= 0 || port > 65535 {
 		return ""
 	}
-	serviceName, _, dialErr := PortIdentify("tcp", ip, uint16(port), timeout)
+	serviceName, version, _, dialErr := PortIdentify("tcp", ip, uint16(port), timeout)
 	if dialErr {
 		logger.Debugf("服务识别超时/连接失败: %s:%d", ip.String(), port)
 		return ""
@@ -146,6 +146,9 @@ func detectService(ip net.IP, port int, timeout time.Duration) string {
 		serviceName = ""
 	}
 	if serviceName != "" {
+		if version != "" {
+			serviceName = serviceName + " " + version
+		}
 		logger.Debugf("服务识别成功: %s:%d => %s", ip.String(), port, serviceName)
 		return serviceName
 	}

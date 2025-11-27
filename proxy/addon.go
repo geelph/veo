@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 	"io"
 	"net/http"
 )

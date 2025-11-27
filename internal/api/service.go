@@ -9,27 +9,23 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/andybalholm/brotli"
 	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	portconfig "veo/internal/core/ports"
+	"veo/pkg/utils/interfaces"
+	portconfig "veo/pkg/portscan"
 	internaldirscan "veo/pkg/dirscan"
 	fingerprintinternal "veo/pkg/fingerprint"
 	portscanpkg "veo/pkg/portscan"
 	masscanrunner "veo/pkg/portscan/masscan"
 	portservice "veo/pkg/portscan/service"
-	"veo/internal/utils/dictionary"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/httpclient"
-	requests "veo/internal/utils/processor"
-	sharedutils "veo/internal/utils/shared"
+	"veo/pkg/utils/httpclient"
+	requests "veo/pkg/utils/processor"
+	sharedutils "veo/pkg/utils/shared"
 )
 
 type DirscanPage struct {
@@ -244,7 +240,7 @@ func buildDirscanEngineConfig() *internaldirscan.EngineConfig {
 	}
 }
 
-func buildDirscanFilter(cfg *DirscanModuleConfig) *filter.FilterConfig {
+func buildDirscanFilter(cfg *DirscanModuleConfig) *internaldirscan.FilterConfig {
 	if cfg == nil {
 		return nil
 	}
@@ -252,7 +248,7 @@ func buildDirscanFilter(cfg *DirscanModuleConfig) *filter.FilterConfig {
 		return nil
 	}
 
-	filterCfg := filter.DefaultFilterConfig()
+	filterCfg := internaldirscan.DefaultFilterConfig()
 	if len(cfg.ValidStatusCodes) > 0 {
 		filterCfg.ValidStatusCodes = append([]int(nil), cfg.ValidStatusCodes...)
 	}
@@ -308,15 +304,15 @@ func convertToFingerprintResponse(page *interfaces.HTTPResponse) *fingerprintint
 	}
 
 	return &fingerprintinternal.HTTPResponse{
-		URL:           page.URL,
-		Method:        method,
-		StatusCode:    page.StatusCode,
-		Headers:       headers,
-		Body:          body,
-		ContentType:   page.ContentType,
-		ContentLength: page.ContentLength,
-		Server:        page.Server,
-		Title:         page.Title,
+		URL:             page.URL,
+		Method:          method,
+		StatusCode:      page.StatusCode,
+		ResponseHeaders: headers,
+		Body:            body,
+		ContentType:     page.ContentType,
+		ContentLength:   page.ContentLength,
+		Server:          page.Server,
+		Title:           page.Title,
 	}
 }
 
@@ -606,15 +602,15 @@ func runFingerprintPathProbing(engine *fingerprintinternal.Engine, processor *re
 				}
 
 				resp := &fingerprintinternal.HTTPResponse{
-					URL:           probeURL,
-					Method:        "GET",
-					StatusCode:    statusCode,
-					Headers:       map[string][]string{},
-					Body:          body,
-					ContentType:   "",
-					ContentLength: int64(len(body)),
-					Server:        "",
-					Title:         sharedutils.ExtractTitle(body),
+					URL:             probeURL,
+					Method:          "GET",
+					StatusCode:      statusCode,
+					ResponseHeaders: map[string][]string{},
+					Body:            body,
+					ContentType:     "",
+					ContentLength:   int64(len(body)),
+					Server:          "",
+					Title:           sharedutils.ExtractTitle(body),
 				}
 
 				match := engine.MatchSpecificRule(rule, resp, httpClient, baseURL)
@@ -667,15 +663,15 @@ func runFingerprint404Probing(engine *fingerprintinternal.Engine, processor *req
 		}
 
 		resp := &fingerprintinternal.HTTPResponse{
-			URL:           notFoundURL,
-			Method:        "GET",
-			StatusCode:    statusCode,
-			Headers:       map[string][]string{},
-			Body:          body,
-			ContentType:   "text/html",
-			ContentLength: int64(len(body)),
-			Server:        "",
-			Title:         sharedutils.ExtractTitle(body),
+			URL:             notFoundURL,
+			Method:          "GET",
+			StatusCode:      statusCode,
+			ResponseHeaders: map[string][]string{},
+			Body:            body,
+			ContentType:     "text/html",
+			ContentLength:   int64(len(body)),
+			Server:          "",
+			Title:           sharedutils.ExtractTitle(body),
 		}
 
 		rawMatches := engine.AnalyzeResponseWithClientSilent(resp, httpClient)
@@ -734,7 +730,7 @@ type requestConfigSnapshot struct {
 
 func applyScanOverrides(overrides ScanOptionOverrides, wordList string) (func(), error) {
 	originalHeaders := config.GetCustomHeaders()
-	originalWordlists := dictionary.GetWordlistPaths()
+	originalWordlists := internaldirscan.GetWordlistPaths()
 	requestSnapshot := captureRequestConfigSnapshot()
 
 	if err := applyRequestOverrides(overrides); err != nil {
@@ -744,14 +740,14 @@ func applyScanOverrides(overrides ScanOptionOverrides, wordList string) (func(),
 
 	trimmedWordlist := strings.TrimSpace(wordList)
 	if trimmedWordlist != "" {
-		dictionary.SetWordlistPaths([]string{trimmedWordlist})
+		internaldirscan.SetWordlistPaths([]string{trimmedWordlist})
 	}
 
 	if headers := parseHeaderOverrides(overrides.Header); len(headers) > 0 {
 		headerMap, err := buildHeaderMap(headers)
 		if err != nil {
 			restoreRequestConfigSnapshot(requestSnapshot)
-			dictionary.SetWordlistPaths(originalWordlists)
+			internaldirscan.SetWordlistPaths(originalWordlists)
 			return nil, err
 		}
 		config.SetCustomHeaders(headerMap)
@@ -760,7 +756,7 @@ func applyScanOverrides(overrides ScanOptionOverrides, wordList string) (func(),
 	cleanup := func() {
 		restoreRequestConfigSnapshot(requestSnapshot)
 		config.SetCustomHeaders(originalHeaders)
-		dictionary.SetWordlistPaths(originalWordlists)
+		internaldirscan.SetWordlistPaths(originalWordlists)
 	}
 	return cleanup, nil
 }

@@ -1,8 +1,7 @@
 package dirscan
 
 import (
-	"veo/internal/core/logger"
-	"veo/internal/utils/collector"
+	"veo/pkg/utils/logger"
 	"veo/proxy"
 )
 
@@ -22,7 +21,7 @@ type DirscanModule struct {
 }
 
 // NewDirscanModule 创建目录扫描模块
-func NewDirscanModule(col *collector.Collector) (*DirscanModule, error) {
+func NewDirscanModule(col *Collector) (*DirscanModule, error) {
 	addon, err := CreateDefaultAddon()
 	if err != nil {
 		return nil, err

@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"veo/internal/core/logger"
-	"veo/internal/core/useragent"
+	"veo/pkg/utils/logger"
+	"veo/pkg/utils/useragent"
 )
 
 type Action uint8
@@ -48,7 +48,7 @@ var readBufPool = &sync.Pool{
 }
 
 // PortIdentify 端口识别
-func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Duration) (serviceName string, banner []byte, isDailErr bool) {
+func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Duration) (serviceName string, version string, banner []byte, isDailErr bool) {
 	matchedRule := make(map[string]struct{})
 	recordMatched := func(s string) {
 		matchedRule[s] = struct{}{}
@@ -60,28 +60,31 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 	}
 
 	unknown := "unknown"
-	var sn string
+	var sn, ver string
 
 	defer func() {
 		if sn == "http" && bytes.HasPrefix(banner, []byte("HTTP/1.1 400")) {
-			sn2, banner2, isDailErr2 := matchRule(network, ip, _port, "https", dailTimeout)
+			sn2, ver2, banner2, isDailErr2 := matchRule(network, ip, _port, "https", dailTimeout)
 			if !isDailErr && sn2 != "" {
 				sn = sn2
+				ver = ver2
 				banner = banner2
 				isDailErr = isDailErr2
 			}
 		}
+		serviceName = sn
+		version = ver
 	}()
 
 	if serviceNames, ok := portServiceOrder[_port]; ok {
 		for _, service := range serviceNames {
 			recordMatched(service)
-			sn, banner, isDailErr = matchRule(network, ip, _port, service, dailTimeout)
+			sn, ver, banner, isDailErr = matchRule(network, ip, _port, service, dailTimeout)
 			if sn != "" {
-				logger.Debugf("priority port order matched %s:%d => %s banner=%q", ip.String(), _port, sn, previewBanner(banner))
-				return sn, banner, false
+				logger.Debugf("priority port order matched %s:%d => %s %s banner=%q", ip.String(), _port, sn, ver, previewBanner(banner))
+				return sn, ver, banner, false
 			} else if isDailErr {
-				return unknown, banner, isDailErr
+				return unknown, "", banner, isDailErr
 			}
 		}
 	}
@@ -99,7 +102,7 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 		now := time.Now()
 		conn, _ = net.DialTimeout(network, address, dailTimeout)
 		if conn == nil {
-			return unknown, banner, true
+			return unknown, "", banner, true
 		}
 		lastDailTime = time.Since(now) * 2
 		if lastDailTime < dailTimeout {
@@ -120,8 +123,8 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 					continue
 				}
 				for _, rule := range serviceRules[service].DataGroup {
-					if matchRuleWithBuf(buf[:n], ip, _port, rule, "") {
-						return service, banner, false
+					if matched, v := matchRuleWithBuf(buf[:n], ip, _port, rule, ""); matched {
+						return service, v, banner, false
 					}
 				}
 
@@ -138,12 +141,12 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 			continue
 		}
 		recordMatched(service)
-		sn, banner, isDailErr = matchRule(network, ip, _port, service, dailTimeout)
+		sn, ver, banner, isDailErr = matchRule(network, ip, _port, service, dailTimeout)
 		if sn != "" {
-			logger.Debugf("priority service matched %s:%d => %s banner=%q", ip.String(), _port, sn, previewBanner(banner))
-			return sn, banner, false
+			logger.Debugf("priority service matched %s:%d => %s %s banner=%q", ip.String(), _port, sn, ver, previewBanner(banner))
+			return sn, ver, banner, false
 		} else if isDailErr {
-			return unknown, banner, true
+			return unknown, "", banner, true
 		}
 	}
 
@@ -152,19 +155,19 @@ func PortIdentify(network string, ip net.IP, _port uint16, dailTimeout time.Dura
 		if ok {
 			continue
 		}
-		sn, banner, isDailErr = matchRule(network, ip, _port, service, dailTimeout)
+		sn, ver, banner, isDailErr = matchRule(network, ip, _port, service, dailTimeout)
 		if sn != "" {
-			logger.Debugf("fallback service matched %s:%d => %s banner=%q", ip.String(), _port, sn, previewBanner(banner))
-			return sn, banner, false
+			logger.Debugf("fallback service matched %s:%d => %s %s banner=%q", ip.String(), _port, sn, ver, previewBanner(banner))
+			return sn, ver, banner, false
 		} else if isDailErr {
-			return unknown, banner, true
+			return unknown, "", banner, true
 		}
 	}
 
-	return unknown, banner, false
+	return unknown, "", banner, false
 }
 
-func matchRuleWithBuf(buf, ip net.IP, _port uint16, rule ruleData, ua string) bool {
+func matchRuleWithBuf(buf []byte, ip net.IP, _port uint16, rule ruleData, ua string) (bool, string) {
 	data := []byte("")
 	if rule.Data != nil {
 		data = bytes.Replace(rule.Data, []byte("{IP}"), []byte(ip.String()), -1)
@@ -177,18 +180,23 @@ func matchRuleWithBuf(buf, ip net.IP, _port uint16, rule ruleData, ua string) bo
 	}
 	if rule.Regexps != nil {
 		for _, _regex := range rule.Regexps {
-			if _regex.MatchString(convert2utf8(string(buf))) {
-				return true
+			matches := _regex.FindStringSubmatch(convert2utf8(string(buf)))
+			if len(matches) > 0 {
+				version := ""
+				if len(matches) > 1 {
+					version = matches[1]
+				}
+				return true, version
 			}
 		}
 	}
 	if len(data) != 0 && bytes.Contains(buf, data) {
-		return true
+		return true, ""
 	}
-	return false
+	return false, ""
 }
 
-func matchRule(network string, ip net.IP, _port uint16, serviceName string, dailTimeout time.Duration) (serviceNameRet string, banner []byte, isDailErr bool) {
+func matchRule(network string, ip net.IP, _port uint16, serviceName string, dailTimeout time.Duration) (serviceNameRet string, versionRet string, banner []byte, isDailErr bool) {
 	var err error
 	var isTls bool
 	var conn net.Conn
@@ -272,9 +280,10 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 			banner = make([]byte, n)
 			copy(banner, buf[:n])
 			logger.Debugf("recv banner %s:%d (%s) => %q", ip.String(), _port, serviceName, previewBanner(buf[:n]))
-			if matchRuleWithBuf(buf[:n], ip, _port, rule, userAgent) {
+			if matched, ver := matchRuleWithBuf(buf[:n], ip, _port, rule, userAgent); matched {
 				serviceNameRet = serviceName
-				logger.Debugf("exact match service=%s banner=%q", serviceName, previewBanner(buf[:n]))
+				versionRet = ver
+				logger.Debugf("exact match service=%s version=%s banner=%q", serviceName, ver, previewBanner(buf[:n]))
 				return
 			}
 			for _, s := range flowsService {
@@ -282,9 +291,10 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 					if rule2.Action == ActionSend {
 						continue
 					}
-					if matchRuleWithBuf(buf[:n], ip, _port, rule2, userAgent) {
-						logger.Debugf("group match service=%s banner=%q", s, previewBanner(buf[:n]))
+					if matched, ver := matchRuleWithBuf(buf[:n], ip, _port, rule2, userAgent); matched {
+						logger.Debugf("group match service=%s version=%s banner=%q", s, ver, previewBanner(buf[:n]))
 						serviceNameRet = s
+						versionRet = ver
 						return
 					}
 				}
@@ -294,9 +304,13 @@ func matchRule(network string, ip net.IP, _port uint16, serviceName string, dail
 
 	if serviceNameRet == "" && len(banner) > 0 {
 		for serviceName, _regex := range doneRecvFinger {
-			if _regex.MatchString(convert2utf8(string(banner))) {
-				logger.Debugf("done-recv regex matched service=%s banner=%q", serviceName, previewBanner(banner))
+			matches := _regex.FindStringSubmatch(convert2utf8(string(banner)))
+			if len(matches) > 0 {
 				serviceNameRet = serviceName
+				if len(matches) > 1 {
+					versionRet = matches[1]
+				}
+				logger.Debugf("done-recv regex matched service=%s version=%s banner=%q", serviceName, versionRet, previewBanner(banner))
 			}
 		}
 	}

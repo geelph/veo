@@ -8,12 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
+	"veo/pkg/utils/interfaces"
+	"veo/pkg/utils/logger"
 	report "veo/pkg/reporter"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/generator"
-	requests "veo/internal/utils/processor"
+	requests "veo/pkg/utils/processor"
 )
 
 // ===========================================
@@ -38,19 +36,19 @@ func NewEngine(config *EngineConfig) *Engine {
 }
 
 // SetFilterConfig 设置自定义过滤器配置（SDK可用）
-func (e *Engine) SetFilterConfig(cfg *filter.FilterConfig) {
+func (e *Engine) SetFilterConfig(cfg *FilterConfig) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.filterConfig = filter.CloneFilterConfig(cfg)
+	e.filterConfig = CloneFilterConfig(cfg)
 }
 
-func (e *Engine) getFilterConfig() *filter.FilterConfig {
+func (e *Engine) getFilterConfig() *FilterConfig {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.filterConfig == nil {
 		return nil
 	}
-	return filter.CloneFilterConfig(e.filterConfig)
+	return CloneFilterConfig(e.filterConfig)
 }
 
 // GetStats 获取统计信息
@@ -172,7 +170,7 @@ func (e *Engine) generateScanURLs(collectorInstance interfaces.URLCollectorInter
 	logger.Debug("开始生成扫描URL")
 
 	// 创建内容管理器（使用utils包中的实现）
-	contentManager := generator.NewContentManager()
+	contentManager := NewContentManager()
 	contentManager.SetCollector(collectorInstance)
 
 	// 生成扫描URL
@@ -236,11 +234,11 @@ func (e *Engine) getActualConcurrency() int {
 func (e *Engine) applyFilter(responses []*interfaces.HTTPResponse) (*interfaces.FilterResult, error) {
 	logger.Debug("开始应用响应过滤器")
 
-	var responseFilter *filter.ResponseFilter
+	var responseFilter *ResponseFilter
 	if cfg := e.getFilterConfig(); cfg != nil {
-		responseFilter = filter.NewResponseFilter(cfg)
+		responseFilter = NewResponseFilter(cfg)
 	} else {
-		responseFilter = filter.CreateResponseFilterFromExternal()
+		responseFilter = CreateResponseFilterFromExternal()
 	}
 
 	// 转换为过滤器可处理的格式

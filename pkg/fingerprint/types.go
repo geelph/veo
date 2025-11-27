@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"veo/internal/core/types"
+	"veo/pkg/types"
 
 	"gopkg.in/yaml.v3"
 )

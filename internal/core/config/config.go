@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 
 	"gopkg.in/yaml.v3"
 )

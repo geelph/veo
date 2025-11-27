@@ -17,18 +17,15 @@ import (
 	"syscall"
 	"time"
 	"veo/internal/core/config"
-	"veo/internal/core/console"
-	"veo/internal/core/logger"
-	modulepkg "veo/internal/core/module"
-	portconfig "veo/internal/core/ports"
-	"veo/pkg/authlearning"
+	"veo/pkg/core/console"
+	modulepkg "veo/pkg/core/module"
 	"veo/pkg/dirscan"
 	fpaddon "veo/pkg/fingerprint"
-	"veo/internal/utils/collector"
-	"veo/internal/utils/dictionary"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/formatter"
-	"veo/internal/utils/httpclient"
+	portconfig "veo/pkg/portscan"
+	"veo/pkg/utils/formatter"
+	"veo/pkg/utils/httpclient"
+	"veo/pkg/utils/logger"
+	"veo/pkg/utils/processor/auth"
 	"veo/proxy"
 
 	// "os/exec" // removed: masscan执行迁移至模块
@@ -36,7 +33,6 @@ import (
 	masscanrunner "veo/pkg/portscan/masscan"
 	portservice "veo/pkg/portscan/service"
 	report "veo/pkg/reporter"
-	// neturl "net/url" // not used after logic change
 )
 
 // arrayFlags 实现flag.Value接口，支持多个相同参数
@@ -56,7 +52,7 @@ type CLIArgs struct {
 	Targets    []string // 目标主机/URL (-u)
 	TargetFile string   // 新增：目标文件路径 (-l)
 	Modules    []string // 启用的模块 (-m)
-	Port       int      // 监听端口 (-lp)
+	Port       int      // 监听端口 (--lp)
 	// 端口扫描（masscan）相关
 	Ports    string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
 	Rate     int    // 扫描速率 (--rate，包/秒)
@@ -107,11 +103,11 @@ var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.Mod
 // CLIApp CLI应用程序
 type CLIApp struct {
 	proxy             *proxy.Proxy
-	collector         *collector.Collector
+	collector         *dirscan.Collector
 	consoleManager    *console.ConsoleManager
 	dirscanModule     *dirscan.DirscanModule
 	fingerprintAddon  *fpaddon.FingerprintAddon
-	authLearningAddon *authlearning.AuthLearningAddon
+	authLearningAddon *auth.AuthLearningAddon
 	proxyStarted      bool
 	args              *CLIArgs
 }
@@ -181,7 +177,7 @@ func Execute() {
 		if err := startApplication(args); err != nil {
 			logger.Fatalf("启动应用程序失败: %v", err)
 		}
-		// 等待中断信号
+		// 等待中断信号或用户输入
 		waitForSignal()
 	} else {
 		// 主动扫描模式
@@ -365,7 +361,7 @@ veo - 端口扫描/指纹识别/目录扫描
   -u string            目标列表，逗号分隔；支持 URL / 域名 / host:port / CIDR / IP 范围
   -l string            目标文件，每行一个目标；支持空行和 # 注释
   -m string            启用模块，默认 finger,dirscan。可选 finger / dirscan / port
-  --listen             被动代理模式；配合 -lp 指定监听端口（默认 9080）
+  --listen             被动代理模式；配合 --lp 指定监听端口（默认 9080）
 
 端口扫描:
   -p string            端口表达式，例如 80,443,8000-8100
@@ -404,7 +400,7 @@ veo - 端口扫描/指纹识别/目录扫描
   %[1]s -u https://target.com -m finger,dirscan
   %[1]s -u 1.1.1.1 -m port -p 1-65535 -sV --rate 10000
   %[1]s -l targets.txt -m finger,dirscan --stats
-  %[1]s -u target.com --listen -lp 8080
+  %[1]s -u target.com --listen --lp 8080
 
 `, prog)
 }
@@ -646,7 +642,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 	}
 
 	// 只在启用dirscan模块时创建collector和相关组件
-	var collectorInstance *collector.Collector
+	var collectorInstance *dirscan.Collector
 	var consoleManager *console.ConsoleManager
 	var dirscanModule *dirscan.DirscanModule
 
@@ -655,7 +651,7 @@ func initializeApp(args *CLIArgs) (*CLIApp, error) {
 
 		// 创建collector
 		logger.Debug("创建URL采集器...")
-		collectorInstance = collector.NewCollector()
+		collectorInstance = dirscan.NewCollector()
 
 		// 创建控制台管理器
 		logger.Debug("创建控制台管理器...")
@@ -780,7 +776,7 @@ func applyArgsToConfig(args *CLIArgs) {
 	// 目标：统一主动/被动两种模式对状态码来源的处理逻辑
 	// 1) 设置全局 ResponseFilter 的有效状态码（影响目录扫描结果过滤）
 	// 2) 同步覆盖被动模式 URL 采集器（Collector）的状态码白名单
-	var customFilterConfig *filter.FilterConfig
+	var customFilterConfig *dirscan.FilterConfig
 
 	if args.StatusCodes != "" {
 		statusCodes, err := parseStatusCodes(args.StatusCodes)
@@ -790,7 +786,7 @@ func applyArgsToConfig(args *CLIArgs) {
 			logger.Debugf("成功解析 %d 个状态码: %v", len(statusCodes), statusCodes)
 
 			// 1) 覆盖全局过滤配置（供 ResponseFilter 使用）
-			customFilterConfig = filter.DefaultFilterConfig()
+			customFilterConfig = dirscan.DefaultFilterConfig()
 			customFilterConfig.ValidStatusCodes = statusCodes
 			logger.Infof("状态码过滤设置为 %v", statusCodes)
 
@@ -805,14 +801,14 @@ func applyArgsToConfig(args *CLIArgs) {
 
 	if args.FilterTolerance != -1 {
 		if customFilterConfig == nil {
-			customFilterConfig = filter.DefaultFilterConfig()
+			customFilterConfig = dirscan.DefaultFilterConfig()
 		}
 		customFilterConfig.FilterTolerance = int64(args.FilterTolerance)
 		logger.Debugf("CLI参数覆盖：相似页面过滤容错阈值设置为 %d 字节", args.FilterTolerance)
 	}
 
 	if customFilterConfig != nil {
-		filter.SetGlobalFilterConfig(customFilterConfig)
+		dirscan.SetGlobalFilterConfig(customFilterConfig)
 	}
 
 	// 设置目标白名单
@@ -828,10 +824,10 @@ func applyArgsToConfig(args *CLIArgs) {
 	// 应用自定义字典路径
 	if args.Wordlist != "" {
 		wordlists := parseWordlistPaths(args.Wordlist)
-		dictionary.SetWordlistPaths(wordlists)
+		dirscan.SetWordlistPaths(wordlists)
 		logger.Infof("Use Dicts: %s", strings.Join(wordlists, ","))
 	} else {
-		dictionary.SetWordlistPaths(nil)
+		dirscan.SetWordlistPaths(nil)
 	}
 
 	// 应用输出文件路径
@@ -880,7 +876,7 @@ func runMasscanPortScan(args *CLIArgs) error {
 	}
 	for _, r := range results {
 		if r.Service != "" {
-			logger.Infof("%s:%d (%s)", r.IP, r.Port, r.Service)
+			logger.Infof("%s:%d %s", r.IP, r.Port, formatter.FormatProtocol(strings.ToUpper(strings.TrimSpace(r.Service))))
 		} else {
 			logger.Infof("%s:%d", r.IP, r.Port)
 		}
@@ -997,8 +993,43 @@ func createFingerprintAddon() (*fpaddon.FingerprintAddon, error) {
 }
 
 // createAuthLearningAddon 创建认证学习插件
-func createAuthLearningAddon() *authlearning.AuthLearningAddon {
-	addon := authlearning.NewAuthLearningAddon()
+func createAuthLearningAddon() *auth.AuthLearningAddon {
+	addon := auth.NewAuthLearningAddon()
+
+	// 设置回调：与全局配置交互
+	addon.SetCallbacks(
+		// OnAuthLearned: 更新全局配置
+		func(headers map[string]string) {
+			// 获取当前的全局自定义头部
+			currentHeaders := config.GetCustomHeaders()
+			mergedHeaders := make(map[string]string)
+
+			// 先复制现有的头部
+			for key, value := range currentHeaders {
+				mergedHeaders[key] = value
+			}
+
+			// 添加新学习到的Authorization头部（如果不存在的话）
+			newHeadersCount := 0
+			for key, value := range headers {
+				if _, exists := mergedHeaders[key]; !exists {
+					mergedHeaders[key] = value
+					newHeadersCount++
+				}
+			}
+
+			// 更新全局配置
+			if newHeadersCount > 0 {
+				config.SetCustomHeaders(mergedHeaders)
+				logger.Debugf("应用了 %d 个新的Authorization头部到全局配置", newHeadersCount)
+			}
+		},
+		// IsAuthSet: 检查是否已设置认证头部
+		func() bool {
+			return config.HasCustomHeaders()
+		},
+	)
+
 	logger.Debug("认证学习插件创建成功")
 	return addon
 }
@@ -1129,19 +1160,91 @@ func getModuleStatus(enabled bool) string {
 	return "[X]"
 }
 
-// waitForSignal 等待中断信号
+// waitForSignal 等待中断信号或用户输入
 func waitForSignal() {
 	// 创建信号通道
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 等待信号
-	sig := <-sigChan
-	fmt.Println()
-	logger.Info(sig)
+	// 键盘输入通道 (支持按回车触发扫描)
+	inputChan := make(chan struct{})
+	go func() {
+		// 读取标准输入
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				// 如果stdin关闭或出错，退出输入监听
+				return
+			}
+			// 只有按回车才触发
+			if buf[0] == '\n' {
+				inputChan <- struct{}{}
+			}
+		}
+	}()
 
-	// 执行清理
-	cleanup()
+	logger.Info("按 [Enter] 键开始扫描收集到的目标...")
+
+	for {
+		select {
+		case sig := <-sigChan:
+			fmt.Println()
+			logger.Info(sig)
+			cleanup()
+			return
+		case <-inputChan:
+			if app != nil {
+				app.triggerScan()
+			}
+		}
+	}
+}
+
+// triggerScan 触发被动模式下的目录扫描
+func (app *CLIApp) triggerScan() {
+	logger.Info("用户触发扫描...")
+
+	if app.dirscanModule == nil {
+		logger.Warn("目录扫描模块未启用，无法执行扫描")
+		return
+	}
+
+	addon := app.dirscanModule.GetAddon()
+	if addon == nil {
+		logger.Error("目录扫描Addon未初始化")
+		return
+	}
+
+	// 检查是否有收集到URL
+	if len(addon.GetCollectedURLs()) == 0 {
+		logger.Warn("没有收集到待扫描的URL，请先浏览目标网站")
+		return
+	}
+
+	// 暂停指纹识别插件（如果存在），避免扫描流量干扰指纹识别
+	if app.fingerprintAddon != nil {
+		app.fingerprintAddon.Disable()
+		logger.Debug("指纹识别插件已暂停")
+	}
+
+	// 执行扫描
+	// TriggerScan 会自动暂停收集，扫描完成后恢复收集
+	logger.Info("开始执行目录扫描...")
+	result, err := addon.TriggerScan()
+	if err != nil {
+		logger.Errorf("扫描执行失败: %v", err)
+	} else {
+		logger.Infof("扫描完成，发现 %d 个有效结果", len(result.FilterResult.ValidPages))
+	}
+
+	// 恢复指纹识别插件
+	if app.fingerprintAddon != nil {
+		app.fingerprintAddon.Enable()
+		logger.Debug("指纹识别插件已恢复")
+	}
+
+	logger.Info("等待下一轮收集，按 [Enter] 键再次扫描...")
 }
 
 // cleanup 清理资源
@@ -1391,7 +1494,7 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 	if printResults {
 		for _, r := range results {
 			if strings.TrimSpace(r.Service) != "" {
-				logger.Infof("%s:%d (%s)", r.IP, r.Port, strings.TrimSpace(r.Service))
+				logger.Infof("%s:%d %s", r.IP, r.Port, formatter.FormatProtocol(strings.ToUpper(strings.TrimSpace(r.Service))))
 			} else {
 				logger.Infof("%s:%d", r.IP, r.Port)
 			}

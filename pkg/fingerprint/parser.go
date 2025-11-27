@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 )
 
 var (

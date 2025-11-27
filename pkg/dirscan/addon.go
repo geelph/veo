@@ -3,8 +3,7 @@ package dirscan
 import (
 	"fmt"
 
-	"veo/internal/core/logger"
-	"veo/internal/utils/collector"
+	"veo/pkg/utils/logger"
 )
 
 // ===========================================
@@ -14,7 +13,7 @@ import (
 // DirscanAddon 目录扫描插件
 type DirscanAddon struct {
 	engine    *Engine
-	collector *collector.Collector
+	collector *Collector
 	enabled   bool
 	status    ScanStatus
 }
@@ -23,7 +22,7 @@ type DirscanAddon struct {
 func NewDirscanAddon(config *EngineConfig) (*DirscanAddon, error) {
 	// 创建引擎
 	engine := NewEngine(config)
-	collectorInstance := collector.NewCollector()
+	collectorInstance := NewCollector()
 
 	addon := &DirscanAddon{
 		engine:    engine,
@@ -143,14 +142,14 @@ func (da *DirscanAddon) GetStatus() ScanStatus {
 // 控制台设置接口已移除，保持简洁依赖
 
 // GetCollector 获取collector（用于依赖注入）
-func (da *DirscanAddon) GetCollector() *collector.Collector {
+func (da *DirscanAddon) GetCollector() *Collector {
 	return da.collector
 }
 
 // SetCollector 注入外部的URL采集器实例，确保与代理侧使用同一实例
 //
 // 参数:
-//   - c: *collector.Collector 外部创建并用于代理拦截的URL采集器
+//   - c: *Collector 外部创建并用于代理拦截的URL采集器
 //
 // 返回:
 //   - 无
@@ -159,7 +158,7 @@ func (da *DirscanAddon) GetCollector() *collector.Collector {
 //   - 在被动代理模式下，代理服务器会将经过的URL写入其注册的Collector实例。
 //     若目录扫描插件内部持有不同的Collector实例，将导致“按回车触发扫描”时取不到已采集的URL。
 //     通过本方法将外部Collector注入到插件中，可确保两端使用同一个实例，避免“没有收集到URL”的问题。
-func (da *DirscanAddon) SetCollector(c *collector.Collector) {
+func (da *DirscanAddon) SetCollector(c *Collector) {
 	if c == nil {
 		return
 	}

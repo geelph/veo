@@ -1,7 +1,7 @@
 package fingerprint
 
 import (
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 	"veo/proxy"
 )
 

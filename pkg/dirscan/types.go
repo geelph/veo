@@ -3,10 +3,8 @@ package dirscan
 import (
 	"sync"
 	"time"
-	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	"veo/internal/utils/filter"
-	requests "veo/internal/utils/processor"
+	"veo/pkg/utils/interfaces"
+	requests "veo/pkg/utils/processor"
 )
 
 // ===========================================
@@ -54,7 +52,7 @@ type Engine struct {
 	stats            *Statistics
 	mu               sync.RWMutex
 	lastScanResult   *ScanResult
-	filterConfig     *filter.FilterConfig
+	filterConfig     *FilterConfig
 	requestProcessor *requests.RequestProcessor
 }
 
@@ -74,15 +72,8 @@ const (
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *EngineConfig {
-	// [修复] 从全局配置读取并发数，保持与全局配置一致
-	globalConfig := config.GetRequestConfig()
-	maxConcurrency := 20 // 默认最小并发数
-	if globalConfig.Threads > 0 {
-		maxConcurrency = globalConfig.Threads
-	}
-
 	return &EngineConfig{
-		MaxConcurrency:   maxConcurrency,
+		MaxConcurrency:   20, // 默认并发数
 		RequestTimeout:   30 * time.Second,
 		EnableCollection: true,
 		EnableFiltering:  true,

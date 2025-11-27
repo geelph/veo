@@ -2280,3 +2280,5 @@
 /center/login
 /mobile/login/loginByPassword
 /AdminSys/
+/config/index.js
+/screen.html

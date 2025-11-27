@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"veo/internal/core/logger"
+	"veo/pkg/utils/logger"
 	"veo/pkg/portscan"
 )
 

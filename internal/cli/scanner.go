@@ -11,26 +11,25 @@ import (
 	"sync"
 	"time"
 	"veo/internal/core/config"
-	"veo/internal/core/interfaces"
-	"veo/internal/core/logger"
-	modulepkg "veo/internal/core/module"
-	"veo/internal/core/types"
-	"veo/internal/core/useragent"
+	"veo/internal/scheduler"
+	modulepkg "veo/pkg/core/module"
+	"veo/pkg/dirscan"
 	"veo/pkg/fingerprint"
 	portscanpkg "veo/pkg/portscan"
 	masscanrunner "veo/pkg/portscan/masscan"
 	report "veo/pkg/reporter"
-	"veo/internal/utils/batch"
-	"veo/internal/utils/filter"
-	"veo/internal/utils/formatter"
-	"veo/internal/utils/generator"
-	"veo/internal/utils/httpclient"
-	requests "veo/internal/utils/processor"
-	"veo/internal/utils/scheduler"
-	"veo/internal/utils/stats"
+	"veo/pkg/types"
+	"veo/pkg/utils/checkalive"
+	"veo/pkg/utils/formatter"
+	"veo/pkg/utils/httpclient"
+	"veo/pkg/utils/interfaces"
+	"veo/pkg/utils/logger"
+	requests "veo/pkg/utils/processor"
+	"veo/pkg/utils/stats"
+	"veo/pkg/utils/useragent"
 
 	"path/filepath"
-	sharedutils "veo/internal/utils/shared"
+	sharedutils "veo/pkg/utils/shared"
 )
 
 func toReporterStats(stats *fingerprint.Statistics) *report.FingerprintStats {
@@ -96,7 +95,7 @@ func collectRawTargets(args *CLIArgs) ([]string, error) {
 	var raw []string
 	raw = append(raw, args.Targets...)
 	if strings.TrimSpace(args.TargetFile) != "" {
-		parser := batch.NewTargetParser()
+		parser := checkalive.NewTargetParser()
 		fileTargets, err := parser.ParseFile(strings.TrimSpace(args.TargetFile))
 		if err != nil {
 			return nil, err
@@ -203,8 +202,8 @@ type ScanController struct {
 	args                   *CLIArgs
 	config                 *config.Config
 	requestProcessor       *requests.RequestProcessor
-	urlGenerator           *generator.URLGenerator
-	contentManager         *generator.ContentManager
+	urlGenerator           *dirscan.URLGenerator
+	contentManager         *dirscan.ContentManager
 	fingerprintEngine      *fingerprint.Engine           // 指纹识别引擎
 	encodingDetector       *fingerprint.EncodingDetector // 编码检测器
 	probedHosts            map[string]bool               // 已探测的主机缓存（用于path探测去重）
@@ -315,8 +314,8 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		args:                   args,
 		config:                 cfg,
 		requestProcessor:       requestProcessor,
-		urlGenerator:           generator.NewURLGenerator(),
-		contentManager:         generator.NewContentManager(),
+		urlGenerator:           dirscan.NewURLGenerator(),
+		contentManager:         dirscan.NewContentManager(),
 		fingerprintEngine:      fpEngine,
 		encodingDetector:       fingerprint.GetEncodingDetector(), // 初始化编码检测器
 		probedHosts:            make(map[string]bool),             // 初始化探测缓存
@@ -523,7 +522,7 @@ func (sc *ScanController) runPortFirstWorkflow(rawTargets []string) error {
 	sc.lastPortExpr = portsExpr
 	sc.lastPortRate = rate
 
-	httpTargets := deriveHTTPRescanTargets(results, sc.ipHostMapping)
+	httpTargets := sc.deriveHTTPRescanTargets(results)
 	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
 	if len(filteredTargets) == 0 {
 		logger.Info("端口扫描未发现 HTTP/HTTPS 服务，无需二轮扫描")
@@ -541,7 +540,7 @@ func (sc *ScanController) runPortFirstWorkflow(rawTargets []string) error {
 		return sc.finalizeScan(nil, nil, nil)
 	}
 
-	logger.Infof("Detected %d HTTP/HTTPS services, starting rescan", len(filteredTargets))
+	logger.Infof("Detected %d HTTP/HTTPS services, Starting Fingerprint and Dirscan", len(filteredTargets))
 	allResults, dirResults, fingerprintResults := sc.executeModulesSequence(modules, filteredTargets)
 
 	return sc.finalizeScan(allResults, dirResults, fingerprintResults)
@@ -638,9 +637,9 @@ func (sc *ScanController) collectPortResults() ([]portscanpkg.OpenPortResult, []
 	return results, aggregatePortResults(results)
 }
 
-func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult, ipHostMapping map[string][]string) []string {
+func (sc *ScanController) deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult) []string {
 	seen := make(map[string]struct{})
-	var targets []string
+	var potentialTargets []string
 
 	for _, r := range results {
 		service := strings.ToLower(strings.TrimSpace(r.Service))
@@ -648,15 +647,12 @@ func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult, ipHostMapping
 			continue
 		}
 
-		var scheme string
-		switch {
-		case strings.HasPrefix(service, "https"):
-			scheme = "https"
-		case strings.HasPrefix(service, "http"):
-			scheme = "http"
-		default:
+		// 只要服务名以http开头（包括http, https, http-alt等），就同时尝试http和https两种协议
+		if !strings.HasPrefix(service, "http") {
 			continue
 		}
+
+		schemes := []string{"http", "https"}
 
 		host := strings.TrimSpace(r.IP)
 		if host == "" {
@@ -664,7 +660,7 @@ func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult, ipHostMapping
 		}
 
 		candidateHosts := []string{host}
-		if mappedHosts, ok := ipHostMapping[host]; ok && len(mappedHosts) > 0 {
+		if mappedHosts, ok := sc.ipHostMapping[host]; ok && len(mappedHosts) > 0 {
 			candidateHosts = append(candidateHosts, mappedHosts...)
 		}
 
@@ -674,20 +670,36 @@ func deriveHTTPRescanTargets(results []portscanpkg.OpenPortResult, ipHostMapping
 				continue
 			}
 
-			targetURL := fmt.Sprintf("%s://%s:%d", scheme, candidateHost, r.Port)
-			if (scheme == "http" && r.Port == 80) || (scheme == "https" && r.Port == 443) {
-				targetURL = fmt.Sprintf("%s://%s", scheme, candidateHost)
-			}
+			for _, scheme := range schemes {
+				targetURL := fmt.Sprintf("%s://%s:%d", scheme, candidateHost, r.Port)
+				if (scheme == "http" && r.Port == 80) || (scheme == "https" && r.Port == 443) {
+					targetURL = fmt.Sprintf("%s://%s", scheme, candidateHost)
+				}
 
-			if _, exists := seen[targetURL]; exists {
-				continue
+				if _, exists := seen[targetURL]; !exists {
+					seen[targetURL] = struct{}{}
+					potentialTargets = append(potentialTargets, targetURL)
+				}
 			}
-			seen[targetURL] = struct{}{}
-			targets = append(targets, targetURL)
 		}
 	}
 
-	return targets
+	if len(potentialTargets) == 0 {
+		return nil
+	}
+
+	// 连通性检测（受-na参数控制）
+	if sc.skipAliveCheck {
+		logger.Debugf("跳过连通性检测，保留所有 %d 个潜在HTTP目标", len(potentialTargets))
+		return potentialTargets
+	}
+
+	logger.Debugf("正在对 %d 个潜在HTTP目标进行连通性检测...", len(potentialTargets))
+	checker := checkalive.NewConnectivityChecker(sc.config)
+	validTargets := checker.BatchCheck(potentialTargets)
+	logger.Debugf("连通性检测完成，有效目标: %d", len(validTargets))
+
+	return validTargets
 }
 
 // aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口数组）
@@ -717,7 +729,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 	// 处理文件中的目标
 	if sc.args.TargetFile != "" {
 		logger.Debugf("处理目标文件: %s", sc.args.TargetFile)
-		parser := batch.NewTargetParser()
+		parser := checkalive.NewTargetParser()
 		fileTargets, err := parser.ParseFile(sc.args.TargetFile)
 		if err != nil {
 			return nil, err
@@ -731,7 +743,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 	}
 
 	// 去重
-	deduplicator := batch.NewDeduplicator()
+	deduplicator := checkalive.NewDeduplicator()
 	uniqueTargets, stats := deduplicator.DeduplicateWithStats(allTargets)
 
 	if stats.DuplicateCount > 0 {
@@ -742,7 +754,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 	// 连通性检测和URL标准化
 	var validTargets []string
 	if sc.skipAliveCheck {
-		parser := batch.NewTargetParser()
+		parser := checkalive.NewTargetParser()
 		for _, target := range uniqueTargets {
 			urls := parser.NormalizeURL(target)
 			if len(urls) > 0 {
@@ -753,7 +765,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 		}
 		logger.Debugf("跳过存活检测，直接使用标准化目标: %d 个", len(validTargets))
 	} else {
-		checker := batch.NewConnectivityChecker(sc.config)
+		checker := checkalive.NewConnectivityChecker(sc.config)
 		validTargets = checker.BatchCheck(uniqueTargets)
 		if len(validTargets) == 0 {
 			return nil, fmt.Errorf("没有可连通的目标")
@@ -819,13 +831,13 @@ func (sc *ScanController) performPortScanAndRescan() ([]interfaces.HTTPResponse,
 	sc.lastPortExpr = portsExpr
 	sc.lastPortRate = rate
 
-	httpTargets := deriveHTTPRescanTargets(results, sc.ipHostMapping)
+	httpTargets := sc.deriveHTTPRescanTargets(results)
 	filteredTargets := sc.filterHTTPRescanTargets(httpTargets)
 	if len(filteredTargets) == 0 {
 		return nil, nil, nil
 	}
 
-	logger.Infof("Detected %d HTTP/HTTPS Services, Starting Rescan", len(filteredTargets))
+	logger.Infof("Detected %d HTTP/HTTPS Services, Starting FingerPrint, Dirscan", len(filteredTargets))
 
 	if sc.statsDisplay.IsEnabled() {
 		stats := sc.statsDisplay.GetStats()
@@ -1248,7 +1260,10 @@ func (sc *ScanController) runConcurrentFingerprint(targets []string) ([]interfac
 	}
 
 	// 主动探测path字段指纹（复用被动模式逻辑）
-	sc.performPathProbingWithTimeout(ctx, targets)
+	pathResults := sc.performPathProbingWithTimeout(ctx, targets)
+	if len(pathResults) > 0 {
+		allResults = append(allResults, pathResults...)
+	}
 
 	return allResults, nil
 }
@@ -1326,7 +1341,10 @@ func (sc *ScanController) runSequentialFingerprint(targets []string) ([]interfac
 	}
 
 	// 主动探测path字段指纹（复用被动模式逻辑）
-	sc.performPathProbing(targets)
+	pathResults := sc.performPathProbing(targets)
+	if len(pathResults) > 0 {
+		allResults = append(allResults, pathResults...)
+	}
 
 	return allResults, nil
 }
@@ -1491,7 +1509,7 @@ func (sc *ScanController) generateCustomReport(filterResult *interfaces.FilterRe
 				logPortScanBanner(portsExpr, effectiveRate)
 				for _, r := range results {
 					if strings.TrimSpace(r.Service) != "" {
-						logger.Infof("%s:%d (%s)", r.IP, r.Port, strings.TrimSpace(r.Service))
+						logger.Infof("%s:%d %s", r.IP, r.Port, formatter.FormatProtocol(strings.ToUpper(strings.TrimSpace(r.Service))))
 					} else {
 						logger.Infof("%s:%d", r.IP, r.Port)
 					}
@@ -1629,7 +1647,7 @@ func (sc *ScanController) applyFilter(responses []interfaces.HTTPResponse) (*int
 	logger.Debug("开始应用响应过滤器")
 
 	// 创建响应过滤器（从外部配置）
-	responseFilter := filter.CreateResponseFilterFromExternal()
+	responseFilter := dirscan.CreateResponseFilterFromExternal()
 	responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
 	responseFilter.EnableFingerprintRuleDisplay(sc.showFingerprintRule)
 
@@ -1650,7 +1668,7 @@ func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPRespon
 	logger.Debugf("开始对目标 %s 应用过滤器，响应数量: %d", target, len(responses))
 
 	// 创建响应过滤器（从外部配置）
-	responseFilter := filter.CreateResponseFilterFromExternal()
+	responseFilter := dirscan.CreateResponseFilterFromExternal()
 	responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
 	responseFilter.EnableFingerprintRuleDisplay(sc.showFingerprintRule)
 
@@ -1813,21 +1831,23 @@ func (sc *ScanController) highlightSnippetLines(snippet, matcher string) []strin
 }
 
 // performPathProbing 执行path字段主动探测（复用被动模式逻辑）
-func (sc *ScanController) performPathProbing(targets []string) {
+func (sc *ScanController) performPathProbing(targets []string) []interfaces.HTTPResponse {
 	// 检查指纹引擎是否可用
 	if sc.fingerprintEngine == nil {
 		logger.Debug("指纹引擎未初始化，跳过path探测")
-		return
+		return nil
 	}
 
 	// 检查是否有包含path字段的规则
 	if !sc.fingerprintEngine.HasPathRules() {
 		logger.Debug("没有包含path字段的规则，跳过path探测")
-		return
+		return nil
 	}
 
 	// 创建HTTP客户端适配器（复用RequestProcessor的HTTP处理能力）
 	httpClient := sc.createHTTPClientAdapter()
+
+	var allResults []interfaces.HTTPResponse
 
 	// 为每个目标执行path探测
 	for _, target := range targets {
@@ -1840,11 +1860,15 @@ func (sc *ScanController) performPathProbing(targets []string) {
 			sc.markHostAsProbed(hostKey)
 
 			// 修复：使用同步方式执行path探测，确保所有path规则都被处理
-			sc.performSyncPathProbing(baseURL, httpClient)
+			results := sc.performSyncPathProbing(baseURL, httpClient)
+			if len(results) > 0 {
+				allResults = append(allResults, results...)
+			}
 		} else {
 			logger.Debugf("主机已探测过，跳过path探测: %s", hostKey)
 		}
 	}
+	return allResults
 }
 
 // createHTTPClientAdapter 创建HTTP客户端（支持TLS和重定向）
@@ -1896,14 +1920,16 @@ func (sc *ScanController) markHostAsProbed(hostKey string) {
 }
 
 // performSyncPathProbing 执行同步path字段主动探测（修复异步执行问题）
-func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient httpclient.HTTPClientInterface) {
+func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient httpclient.HTTPClientInterface) []interfaces.HTTPResponse {
 	logger.Debugf("开始同步path字段主动探测: %s", baseURL)
+
+	var allResults []interfaces.HTTPResponse
 
 	// 获取所有包含path字段的规则
 	pathRules := sc.getPathRulesFromEngine()
 	if len(pathRules) == 0 {
 		logger.Debug("没有包含path字段的规则，跳过主动探测")
-		return
+		return nil
 	}
 
 	logger.Debugf("找到 %d 个包含path字段的规则，开始展开路径", len(pathRules))
@@ -1912,7 +1938,7 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		logger.Debugf("URL解析失败: %s, 错误: %v", baseURL, err)
-		return
+		return nil
 	}
 
 	scheme := parsedURL.Scheme
@@ -1941,7 +1967,7 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 	totalPaths := len(tasks)
 	if totalPaths == 0 {
 		logger.Debug("没有有效的path路径，跳过主动探测")
-		return
+		return nil
 	}
 	logger.Debugf("共需探测 %d 条路径", totalPaths)
 
@@ -1951,6 +1977,7 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 50) // 性能优化：提升path探测并发数
+	resultChan := make(chan *interfaces.HTTPResponse, totalPaths)
 
 	for i, task := range tasks {
 		wg.Add(1)
@@ -1989,7 +2016,7 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 			default:
 			}
 
-			sc.processPathRuleWithTimeout(ctx, index, totalPaths, r, path, scheme, host, baseURL, httpClient)
+			sc.processPathRuleWithTimeout(ctx, index, totalPaths, r, path, scheme, host, baseURL, httpClient, resultChan)
 		}(i, task.rule, task.path)
 	}
 
@@ -1998,6 +2025,16 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 	go func() {
 		wg.Wait()
 		close(done)
+		close(resultChan)
+	}()
+
+	// 收集结果
+	go func() {
+		for res := range resultChan {
+			if res != nil {
+				allResults = append(allResults, *res)
+			}
+		}
 	}()
 
 	select {
@@ -2010,10 +2047,14 @@ func (sc *ScanController) performSyncPathProbing(baseURL string, httpClient http
 		cancel() // 取消所有正在进行的探测
 	}
 
-	logger.Debugf("并发path字段主动探测完成: %s (共探测 %d 条路径)", baseURL, totalPaths)
+	logger.Debugf("并发path字段主动探测完成: %s (共探测 %d 条路径, 发现 %d 个指纹)", baseURL, totalPaths, len(allResults))
 
 	// [新增] 404页面指纹识别
-	sc.perform404PageProbing(baseURL, httpClient)
+	if res404 := sc.perform404PageProbing(baseURL, httpClient); res404 != nil {
+		allResults = append(allResults, *res404)
+	}
+
+	return allResults
 }
 
 // processSingleTargetFingerprintWithTimeout 处理单个目标的指纹识别（新增：支持超时）
@@ -2047,35 +2088,37 @@ func (sc *ScanController) processSingleTargetFingerprintWithTimeout(ctx context.
 }
 
 // performPathProbingWithTimeout 执行path探测（新增：支持超时）
-func (sc *ScanController) performPathProbingWithTimeout(ctx context.Context, targets []string) {
+func (sc *ScanController) performPathProbingWithTimeout(ctx context.Context, targets []string) []interfaces.HTTPResponse {
 	// 创建带超时的context
 	probingCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	// 使用channel通知完成
-	done := make(chan struct{})
+	// 使用channel接收结果
+	resultChan := make(chan []interfaces.HTTPResponse, 1)
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Errorf("Path探测panic: %v", r)
+				resultChan <- nil
 			}
-			close(done)
 		}()
 
-		sc.performPathProbing(targets)
+		resultChan <- sc.performPathProbing(targets)
 	}()
 
 	select {
-	case <-done:
-		logger.Debugf("Path探测完成")
+	case results := <-resultChan:
+		logger.Debugf("Path探测完成，获得 %d 个结果", len(results))
+		return results
 	case <-probingCtx.Done():
 		logger.Warnf("Path探测超时或被取消")
+		return nil
 	}
 }
 
 // processPathRuleWithTimeout 处理单个path规则（新增：支持超时）
-func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index, total int, rule *fingerprint.FingerprintRule, path, scheme, host, baseURL string, httpClient interface{}) {
+func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index, total int, rule *fingerprint.FingerprintRule, path, scheme, host, baseURL string, httpClient interface{}, resultChan chan<- *interfaces.HTTPResponse) {
 	// 创建带超时的context
 	ruleCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -2093,7 +2136,13 @@ func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index,
 
 		// 类型断言转换为正确的接口类型
 		if client, ok := httpClient.(httpclient.HTTPClientInterface); ok {
-			sc.processPathRule(index, total, rule, path, scheme, host, baseURL, client)
+			result := sc.processPathRule(index, total, rule, path, scheme, host, baseURL, client)
+			if result != nil {
+				select {
+				case resultChan <- result:
+				case <-ruleCtx.Done():
+				}
+			}
 		} else {
 			logger.Warnf("HTTP客户端类型转换失败，跳过path规则: %s", rule.Name)
 		}
@@ -2108,7 +2157,7 @@ func (sc *ScanController) processPathRuleWithTimeout(ctx context.Context, index,
 }
 
 // processPathRule 处理单个path规则（提取出来支持并发）
-func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.FingerprintRule, path, scheme, host, baseURL string, httpClient httpclient.HTTPClientInterface) {
+func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.FingerprintRule, path, scheme, host, baseURL string, httpClient httpclient.HTTPClientInterface) *interfaces.HTTPResponse {
 	// 构造完整的探测URL
 	probeURL := sc.buildProbeURLFromParts(scheme, host, path)
 
@@ -2124,7 +2173,7 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 		if sc.progressTracker != nil {
 			sc.progressTracker.UpdateProgress("指纹识别进行中")
 		}
-		return
+		return nil
 	}
 
 	logger.Debugf("主动探测请求成功: %s [%d] 响应体长度: %d",
@@ -2158,12 +2207,33 @@ func (sc *ScanController) processPathRule(index, total int, rule *fingerprint.Fi
 			formatter.FormatURL(probeURL),
 			display,
 			formatter.FormatFingerprintTag("主动探测"))
+
+		// 构造返回结果
+		httpResp := &interfaces.HTTPResponse{
+			URL:           probeURL,
+			StatusCode:    statusCode,
+			ContentLength: int64(len(body)),
+			ContentType:   "text/html",
+			ResponseBody:  body,
+			Title:         response.Title,
+			IsDirectory:   false,
+		}
+		if converted := convertFingerprintMatches([]*fingerprint.FingerprintMatch{match}, sc.showFingerprintSnippet); len(converted) > 0 {
+			httpResp.Fingerprints = converted
+		}
+
+		// 更新进度：path探测完成
+		if sc.progressTracker != nil {
+			sc.progressTracker.UpdateProgress("指纹识别进行中")
+		}
+		return httpResp
 	}
 
 	// 更新进度：path探测完成
 	if sc.progressTracker != nil {
 		sc.progressTracker.UpdateProgress("指纹识别进行中")
 	}
+	return nil
 }
 
 func (sc *ScanController) buildProbeURLFromParts(scheme, host, path string) string {
@@ -2235,14 +2305,14 @@ func startApplicationForPassiveMode(args *CLIArgs, app *CLIApp) error {
 }
 
 // perform404PageProbing 执行404页面指纹识别
-func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpclient.HTTPClientInterface) {
+func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpclient.HTTPClientInterface) *interfaces.HTTPResponse {
 	logger.Debugf("开始404页面指纹识别: %s", baseURL)
 
 	// 解析baseURL获取协议和主机
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		logger.Debugf("URL解析失败: %s, 错误: %v", baseURL, err)
-		return
+		return nil
 	}
 
 	scheme := parsedURL.Scheme
@@ -2256,7 +2326,7 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 	body, statusCode, err := httpClient.MakeRequest(notFoundURL)
 	if err != nil {
 		logger.Debugf("404页面探测请求失败: %s, 错误: %v", notFoundURL, err)
-		return
+		return nil
 	}
 
 	logger.Debugf("404页面响应: 状态码=%d, 内容长度=%d", statusCode, len(body))
@@ -2335,7 +2405,23 @@ func (sc *ScanController) perform404PageProbing(baseURL string, httpClient httpc
 		}
 
 		logger.Info(builder.String())
+
+		// 构造返回结果
+		httpResp := &interfaces.HTTPResponse{
+			URL:           notFoundURL,
+			StatusCode:    statusCode,
+			ContentLength: int64(len(body)),
+			ContentType:   "text/html",
+			ResponseBody:  body,
+			Title:         title,
+			IsDirectory:   false,
+		}
+		if converted := convertFingerprintMatches(matches, sc.showFingerprintSnippet); len(converted) > 0 {
+			httpResp.Fingerprints = converted
+		}
+		return httpResp
 	} else {
 		logger.Debugf("404页面未匹配到任何指纹")
 	}
+	return nil
 }
