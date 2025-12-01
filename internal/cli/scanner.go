@@ -249,11 +249,11 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	}
 	retry := args.Retry
 	if retry <= 0 {
-		retry = 3
+		retry = 1
 	}
 	timeout := args.Timeout
 	if timeout <= 0 {
-		timeout = 10
+		timeout = 3
 	}
 
 	// 创建请求处理器配置
@@ -284,6 +284,19 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 			// 复用被动模式的指纹引擎，避免重复加载
 			fpEngine = globalAddon.GetEngine()
 			logger.Debug("复用被动模式的指纹引擎，避免重复加载")
+		}
+	}
+
+	// [新增] 如果指纹引擎仍为空，且启用了目录扫描，则手动初始化指纹引擎以支持二次识别
+	if fpEngine == nil && args.HasModule(string(modulepkg.ModuleDirscan)) {
+		logger.Debug("检测到目录扫描模块启用，正在初始化指纹引擎以支持二次识别...")
+		// 使用默认配置初始化指纹插件
+		addon, err := fingerprint.CreateDefaultAddon()
+		if err != nil {
+			logger.Warnf("初始化指纹引擎失败，目录扫描将不包含指纹信息: %v", err)
+		} else {
+			fpEngine = addon.GetEngine()
+			logger.Debug("指纹引擎初始化成功 (二次识别模式)")
 		}
 	}
 
@@ -1904,6 +1917,18 @@ func (sc *ScanController) createHTTPClientAdapter() httpclient.HTTPClientInterfa
 
 	// 构造配置，确保包含代理设置
 	clientConfig := httpclient.DefaultConfigWithUserAgent(userAgent)
+
+	// [修复] 应用全局超时设置
+	if sc.timeoutSeconds > 0 {
+		clientConfig.Timeout = time.Duration(sc.timeoutSeconds) * time.Second
+		// 相应调整TLS握手超时，但不超过总超时的一半
+		tlsTimeout := clientConfig.Timeout / 2
+		if tlsTimeout > 5*time.Second {
+			tlsTimeout = 5 * time.Second
+		}
+		clientConfig.TLSTimeout = tlsTimeout
+	}
+
 	if proxyCfg := config.GetProxyConfig(); proxyCfg != nil && proxyCfg.UpstreamProxy != "" {
 		clientConfig.ProxyURL = proxyCfg.UpstreamProxy
 		logger.Debugf("ActiveScan: 设置HTTPClient适配器代理: %s", clientConfig.ProxyURL)

@@ -90,11 +90,6 @@ func (dm *DirscanModule) GetAddons() []proxy.Addon {
 	return []proxy.Addon{}
 }
 
-// IsRequired 检查模块是否为必需模块
-func (dm *DirscanModule) IsRequired() bool {
-	return false
-}
-
 // GetAddon 获取addon实例
 func (dm *DirscanModule) GetAddon() *DirscanAddon {
 	return dm.addon

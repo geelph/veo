@@ -963,7 +963,6 @@
 /s.aspx
 /s.jsp
 /s.jspx
-/?id=1&user=admin&username=admin
 /?userid=1
 /?roleid=1
 /s.php

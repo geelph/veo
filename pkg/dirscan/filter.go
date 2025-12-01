@@ -259,7 +259,6 @@ func (rf *ResponseFilter) UpdateConfig(config *FilterConfig) {
 	// 重建过滤链
 	rf.rebuildFilterChain()
 
-	logger.Debug("配置已更新")
 }
 
 // GetConfig 获取当前配置

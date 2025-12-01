@@ -221,7 +221,7 @@ func sanitizeTargets(values []string) []string {
 func buildDirscanEngineConfig() *internaldirscan.EngineConfig {
 	reqCfg := config.GetRequestConfig()
 	threads := 200
-	timeout := 30
+	timeout := 3
 	if reqCfg != nil {
 		if reqCfg.Threads > 0 {
 			threads = reqCfg.Threads

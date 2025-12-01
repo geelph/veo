@@ -91,11 +91,6 @@ func (da *DirscanAddon) GetScanResults() *ScanResult {
 	return da.engine.GetLastScanResult()
 }
 
-// GetStats 获取统计信息
-func (da *DirscanAddon) GetStats() *Statistics {
-	return da.engine.GetStats()
-}
-
 // ClearResults 清空结果
 func (da *DirscanAddon) ClearResults() {
 	da.engine.ClearResults()

@@ -1170,8 +1170,6 @@ func (rp *RequestProcessor) UpdateConfig(config *RequestConfig) {
 
 	// 更新UserAgent池
 	rp.userAgentPool = initializeUserAgentPool(config)
-
-	logger.Info("配置已更新")
 }
 
 // UpdateUserAgents 更新UserAgent列表

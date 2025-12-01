@@ -1837,7 +1837,7 @@ ueditor-jsp:
     - "contains(body, 'imageActionName')"
     - "contains(body, 'imageFieldName')"
 
-ueditor-net:
+ueditor:
   dsl:
     - "contains(body, 'ueditor')"
 

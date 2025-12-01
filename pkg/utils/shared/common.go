@@ -148,6 +148,22 @@ func (e *TitleExtractor) CleanTitle(title string) string {
 	return strings.TrimSpace(title)
 }
 
+// SanitizeFilename 清理文件名中的非法字符
+func SanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(
+		":", "_",
+		"/", "_",
+		"\\", "_",
+		"?", "_",
+		"*", "_",
+		"|", "_",
+		"<", "_",
+		">", "_",
+		"\"", "_",
+	)
+	return strings.Trim(replacer.Replace(name), "_")
+}
+
 // FileExtensionChecker 文件扩展名检查工具
 type FileExtensionChecker struct{}
 

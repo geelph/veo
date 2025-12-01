@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	requests "veo/pkg/utils/processor"
+	sharedutils "veo/pkg/utils/shared"
 )
 
 // ===========================================
@@ -56,16 +56,6 @@ func (e *Engine) getFilterConfig() *FilterConfig {
 		return nil
 	}
 	return CloneFilterConfig(e.filterConfig)
-}
-
-// GetStats 获取统计信息
-func (e *Engine) GetStats() *Statistics {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	// 创建统计信息副本
-	stats := *e.stats
-	return &stats
 }
 
 // GetLastScanResult 获取最后一次扫描结果
@@ -291,7 +281,7 @@ func (e *Engine) generateReport(filterResult *interfaces.FilterResult, target st
 	}
 
 	timestamp := time.Now().Format("20060102_150405")
-	safeTarget := sanitizeForReportFilename(target)
+	safeTarget := sharedutils.SanitizeFilename(target) // 使用shared包中的SanitizeFilename
 	if safeTarget == "" {
 		safeTarget = "scan"
 	}
@@ -354,19 +344,4 @@ func (e *Engine) extractTarget(responses []*interfaces.HTTPResponse) string {
 		return firstURL[:50] + "..."
 	}
 	return firstURL
-}
-
-func sanitizeForReportFilename(name string) string {
-	replacer := strings.NewReplacer(
-		":", "_",
-		"/", "_",
-		"\\", "_",
-		"?", "_",
-		"*", "_",
-		"|", "_",
-		"<", "_",
-		">", "_",
-		"\"", "_",
-	)
-	return strings.Trim(replacer.Replace(name), "_")
 }

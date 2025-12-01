@@ -25,11 +25,11 @@ var templateVariables = map[string]string{
 
 // URLGenerator URL生成器，专门负责生成扫描URL
 type URLGenerator struct {
-	dictManager   *DictionaryManager // 字典管理器
-	urlValidator  *shared.URLValidator          // URL验证器
-	fileChecker   *shared.FileExtensionChecker  // 文件检查器
-	generatedURLs []string                      // 生成的URL列表
-	mu            sync.RWMutex                  // 读写锁
+	dictManager   *DictionaryManager           // 字典管理器
+	urlValidator  *shared.URLValidator         // URL验证器
+	fileChecker   *shared.FileExtensionChecker // 文件检查器
+	generatedURLs []string                     // 生成的URL列表
+	mu            sync.RWMutex                 // 读写锁
 }
 
 // URLComponents URL组件
@@ -186,130 +186,90 @@ func (ug *URLGenerator) generateURLsFromDictionary(components URLComponents, bas
 	// 性能优化：预分配Builder容量
 	urlBuilder.Grow(len(components.Scheme) + len(components.Host) + 100) // 预估URL长度
 
+	// 提取并处理每个字典条目
 	for _, dictEntry := range dictionary {
-		// 判断是否包含 {{sub_domain}} 占位符，若包含则对每个子域名片段展开
-		entries := []string{dictEntry}
-		if (strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}")) && len(subParts) > 0 {
-			entries = make([]string, 0, len(subParts))
-			for _, part := range subParts {
-				e := strings.ReplaceAll(dictEntry, "{{sub_domain}}", part)
-				e = strings.ReplaceAll(e, "{{SUB_DOMAIN}}", part)
-				entries = append(entries, e)
-			}
-		} else if strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}") {
-			// 对于IP或无法解析子域名的目标，直接跳过包含该占位符的字典项
-			continue
-		}
-
-		for _, expanded := range entries {
-			// 处理模板变量替换（domain/path等）
-			processedEntry := ug.processTemplateVariables(expanded, domain, basePath)
-
-			// 修复：清理字典条目的前导斜杠，避免双斜杠问题
-			processedEntry = strings.TrimPrefix(processedEntry, "/")
-
-			// 性能优化：使用Builder构建URL，避免多次字符串拼接
-			urlBuilder.Reset()
-			urlBuilder.WriteString(components.Scheme)
-			urlBuilder.WriteString("://")
-			urlBuilder.WriteString(components.Host)
-
-			// 构建路径部分
-			if basePath != "" {
-				urlBuilder.WriteString(basePath)
-				if !strings.HasSuffix(basePath, "/") {
-					urlBuilder.WriteString("/")
-				}
-			} else {
-				urlBuilder.WriteString("/")
-			}
-			urlBuilder.WriteString(processedEntry)
-
-			// 添加查询参数（如果需要）
-			if !ug.fileChecker.IsStaticFile(processedEntry) && components.Query != "" {
-				urlBuilder.WriteString("?")
-				urlBuilder.WriteString(components.Query)
-			}
-
-			scanURL := urlBuilder.String()
-
-			// 性能优化：简化URL验证，减少不必要的检查
-			if len(scanURL) > 0 && len(scanURL) < 2048 { // 基本长度检查
-				ug.generatedURLs = append(ug.generatedURLs, scanURL)
-			}
-		}
+		processDictEntry(dictEntry, components, basePath, domain, subParts, ug.fileChecker, &ug.generatedURLs, &urlBuilder)
 	}
 
 	logger.Debug(fmt.Sprintf("使用%s生成URL完成", dictType))
 }
 
-// splitPath 分割路径
-func (ug *URLGenerator) splitPath(path string) []string {
-	path = strings.Trim(path, "/")
-	if path == "" {
-		return []string{}
+// processDictEntry 处理单个字典条目并生成URL
+func processDictEntry(
+	dictEntry string,
+	components URLComponents,
+	basePath, domain string,
+	subParts []string,
+	fileChecker *shared.FileExtensionChecker,
+	generatedURLs *[]string,
+	urlBuilder *strings.Builder,
+) {
+	entries := expandSubDomainPlaceholders(dictEntry, subParts)
+	if len(entries) == 0 {
+		return
 	}
-	return strings.Split(path, "/")
-}
 
-// deduplicateURLs 去重URL（性能优化版本）
-func (ug *URLGenerator) deduplicateURLs() {
-	beforeCount := len(ug.generatedURLs)
+	for _, expanded := range entries {
+		// 处理模板变量替换（domain/path等）
+		processedEntry := processTemplateVariables(expanded, domain, basePath)
 
-	// 性能优化：预分配map容量，减少rehash
-	seen := make(map[string]bool, beforeCount)
-	uniqueURLs := make([]string, 0, beforeCount)
+		// 修复：清理字典条目的前导斜杠，避免双斜杠问题
+		processedEntry = strings.TrimPrefix(processedEntry, "/")
 
-	for _, url := range ug.generatedURLs {
-		if !seen[url] {
-			seen[url] = true
-			uniqueURLs = append(uniqueURLs, url)
+		// 性能优化：使用Builder构建URL，避免多次字符串拼接
+		urlBuilder.Reset()
+		urlBuilder.WriteString(components.Scheme)
+		urlBuilder.WriteString("://")
+		urlBuilder.WriteString(components.Host)
+
+		// 构建路径部分
+		if basePath != "" {
+			urlBuilder.WriteString(basePath)
+			if !strings.HasSuffix(basePath, "/") {
+				urlBuilder.WriteString("/")
+			}
+		} else {
+			urlBuilder.WriteString("/")
+		}
+		urlBuilder.WriteString(processedEntry)
+
+		// 添加查询参数（如果需要）
+		if !fileChecker.IsStaticFile(processedEntry) && components.Query != "" {
+			urlBuilder.WriteString("?")
+			urlBuilder.WriteString(components.Query)
+		}
+
+		scanURL := urlBuilder.String()
+
+		// 性能优化：简化URL验证，减少不必要的检查
+		if len(scanURL) > 0 && len(scanURL) < 2048 { // 基本长度检查
+			*generatedURLs = append(*generatedURLs, scanURL)
 		}
 	}
+}
 
-	ug.generatedURLs = uniqueURLs
-	afterCount := len(ug.generatedURLs)
-
-	if beforeCount != afterCount {
-		logger.Debug(fmt.Sprintf("去重完成: 去重前 %d 个, 去重后 %d 个, 去除重复 %d 个",
-			beforeCount, afterCount, beforeCount-afterCount))
+// expandSubDomainPlaceholders 展开包含子域名占位符的字典条目
+func expandSubDomainPlaceholders(dictEntry string, subParts []string) []string {
+	hasPlaceholder := strings.Contains(dictEntry, "{{sub_domain}}") || strings.Contains(dictEntry, "{{SUB_DOMAIN}}")
+	if !hasPlaceholder {
+		return []string{dictEntry}
 	}
-}
 
-// convertURLMapToList 将URL映射转换为列表
-func (ug *URLGenerator) convertURLMapToList(urlMap map[string]int) []string {
-	urls := make([]string, 0, len(urlMap))
-	for url := range urlMap {
-		urls = append(urls, url)
+	if len(subParts) == 0 {
+		return nil // 无法展开且包含占位符，跳过
 	}
-	return urls
+
+	entries := make([]string, 0, len(subParts))
+	for _, part := range subParts {
+		e := strings.ReplaceAll(dictEntry, "{{sub_domain}}", part)
+		e = strings.ReplaceAll(e, "{{SUB_DOMAIN}}", part)
+		entries = append(entries, e)
+	}
+	return entries
 }
-
-// GetGeneratedURLs 获取生成的URL列表
-func (ug *URLGenerator) GetGeneratedURLs() []string {
-	ug.mu.RLock()
-	defer ug.mu.RUnlock()
-
-	result := make([]string, len(ug.generatedURLs))
-	copy(result, ug.generatedURLs)
-	return result
-}
-
-// Reset 重置生成器
-func (ug *URLGenerator) Reset() {
-	ug.mu.Lock()
-	defer ug.mu.Unlock()
-
-	ug.generatedURLs = make([]string, 0)
-	logger.Debug("URL生成器已重置")
-}
-
-// ===========================================
-// 模板变量处理方法
-// ===========================================
 
 // processTemplateVariables 处理模板变量替换
-func (ug *URLGenerator) processTemplateVariables(dictEntry string, domain string, currentPath string) string {
+func processTemplateVariables(dictEntry string, domain string, currentPath string) string {
 	// 处理变量替换
 	processedEntry := dictEntry
 	hasReplacement := false
@@ -385,6 +345,67 @@ func (ug *URLGenerator) extractSubDomainParts(domain string) []string {
 	}
 	// 去除最后一个顶级域标签
 	return parts[:len(parts)-1]
+}
+
+// splitPath 分割路径
+func (ug *URLGenerator) splitPath(path string) []string {
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return []string{}
+	}
+	return strings.Split(path, "/")
+}
+
+// deduplicateURLs 去重URL（性能优化版本）
+func (ug *URLGenerator) deduplicateURLs() {
+	beforeCount := len(ug.generatedURLs)
+
+	// 性能优化：预分配map容量，减少rehash
+	seen := make(map[string]bool, beforeCount)
+	uniqueURLs := make([]string, 0, beforeCount)
+
+	for _, url := range ug.generatedURLs {
+		if !seen[url] {
+			seen[url] = true
+			uniqueURLs = append(uniqueURLs, url)
+		}
+	}
+
+	ug.generatedURLs = uniqueURLs
+	afterCount := len(ug.generatedURLs)
+
+	if beforeCount != afterCount {
+		logger.Debug(fmt.Sprintf("去重完成: 去重前 %d 个, 去重后 %d 个, 去除重复 %d 个",
+			beforeCount, afterCount, beforeCount-afterCount))
+	}
+}
+
+// convertURLMapToList 将URL映射转换为列表
+func (ug *URLGenerator) convertURLMapToList(urlMap map[string]int) []string {
+	urls := make([]string, 0, len(urlMap))
+	for url := range urlMap {
+		urls = append(urls, url)
+	}
+	return urls
+}
+
+// GetGeneratedURLs 获取生成的URL列表
+func (ug *URLGenerator) GetGeneratedURLs() []string {
+	ug.mu.RLock()
+	defer ug.mu.RUnlock()
+
+	result := make([]string, len(ug.generatedURLs))
+	copy(result, ug.generatedURLs)
+	return result
+}
+
+// Reset 重置生成器
+func (ug *URLGenerator) Reset() {
+	ug.mu.Lock()
+	defer ug.mu.Unlock()
+
+	ug.generatedURLs = make([]string, 0)
+	logger.Debug("URL生成器已重置")
 }
 
 // ============================================================================

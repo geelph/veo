@@ -1,15 +1,14 @@
 package dirscan
 
 import (
-	"veo/internal/core/config"
-	"veo/pkg/utils/interfaces"
-	"veo/pkg/utils/logger"
-	"veo/pkg/utils/shared"
-	"veo/proxy"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
+	"veo/internal/core/config"
+	"veo/pkg/utils/logger"
+	"veo/pkg/utils/shared"
+	"veo/proxy"
 )
 
 // ===========================================
@@ -25,7 +24,6 @@ type Collector struct {
 	mu                 sync.RWMutex    // 读写锁，保证并发安全
 	collectionEnabled  bool            // 收集功能是否启用
 	collectionPaused   bool            // 收集是否暂停（等待用户输入）
-	// contentManager 已移除，不再使用接口抽象
 }
 
 // ===========================================
@@ -58,21 +56,6 @@ func NewCollector() *Collector {
 // ===========================================
 // addon接口实现
 // ===========================================
-
-// Deprecated: SetURLsChangedCallback 已弃用，保留仅为兼容性；新架构不再依赖回调。
-// SetURLsChangedCallback 设置URL变化时的回调函数（保持接口兼容性，但不使用）
-func (c *Collector) SetURLsChangedCallback(callback func(interfaces.URLCollectorInterface)) {
-	// 为了保持接口兼容性而保留，但新架构中不使用回调
-	logger.Debug("URL变化回调已设置（新架构中不使用）")
-}
-
-// Deprecated: SetContentManager 已弃用，保留仅为兼容性；新架构不再依赖外部内容管理器注入。
-// SetContentManager 已移除，不再使用接口抽象
-// 保留方法签名用于兼容性，但不执行任何操作
-func (c *Collector) SetContentManager(contentManager interface{}) {
-	// 不再使用接口抽象，保留用于兼容性
-	logger.Debug("SetContentManager调用（已废弃）")
-}
 
 // Requestheaders 处理请求头，进行URL采集和过滤
 func (c *Collector) Requestheaders(f *proxy.Flow) {

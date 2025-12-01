@@ -215,8 +215,8 @@ func ParseCLIArgs() *CLIArgs {
 		// 新增：线程并发控制和全局配置参数
 		threads     = flag.Int("t", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
 		threadsLong = flag.Int("threads", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
-		retry       = flag.Int("retry", 0, "扫描失败目标的重试次数 (默认: 3)")
-		timeout     = flag.Int("timeout", 0, "全局连接超时时间(秒)，对所有模块生效 (默认: 5)")
+		retry       = flag.Int("retry", 0, "扫描失败目标的重试次数 (默认: 1)")
+		timeout     = flag.Int("timeout", 0, "全局连接超时时间(秒)，对所有模块生效 (默认: 3)")
 
 		// 新增：报告输出控制参数
 		output     = flag.String("o", "", "输出报告文件路径 (默认不输出文件)")
@@ -384,8 +384,8 @@ veo - 端口扫描/指纹识别/目录扫描
 
 性能调优:
   -t, --threads int    全局并发线程数（默认 200）
-  --retry int          失败重试次数（默认 3）
-  --timeout int        全局超时时间（秒，默认 5）
+  --retry int          失败重试次数（默认 1）
+  --timeout int        全局超时时间（秒，默认 3）
 
 目录扫描:
   -w string            指定自定义目录字典，可用逗号添加多个
@@ -757,14 +757,14 @@ func applyArgsToConfig(args *CLIArgs) {
 			requestConfig.Retry = args.Retry
 			logger.Debugf("全局配置：重试次数设置为 %d", requestConfig.Retry)
 		} else if requestConfig.Retry <= 0 {
-			requestConfig.Retry = 3
+			requestConfig.Retry = 1
 		}
 
 		if args.Timeout > 0 {
 			requestConfig.Timeout = args.Timeout
 			logger.Debugf("全局配置：超时时间设置为 %d 秒", requestConfig.Timeout)
 		} else if requestConfig.Timeout <= 0 {
-			requestConfig.Timeout = 10
+			requestConfig.Timeout = 3
 		}
 
 		randomUA := args.RandomUA
@@ -1509,8 +1509,17 @@ func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, p
 
 	results = deduplicateOpenPorts(results)
 
+	// 准备服务识别选项
+	identifyOpts := portservice.Options{}
+	if args.Timeout > 0 {
+		identifyOpts.Timeout = time.Duration(args.Timeout) * time.Second
+	}
+	if args.Threads > 0 {
+		identifyOpts.Concurrency = args.Threads
+	}
+
 	if args.EnableServiceProbe {
-		results = portservice.IdentifyServices(context.Background(), results, portservice.Options{})
+		results = portservice.IdentifyServices(context.Background(), results, identifyOpts)
 	}
 
 	if printResults {
