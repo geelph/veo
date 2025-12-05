@@ -8,7 +8,6 @@ import (
 
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
-	"veo/pkg/types"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -56,61 +55,6 @@ func GenerateExcelReport(filterResult *interfaces.FilterResult, reportType Excel
 		return "", fmt.Errorf("保存 Excel 报告失败: %w", err)
 	}
 
-	logger.Infof("Excel Report: %s", outputPath)
-	return outputPath, nil
-}
-
-// GenerateExcelReportWithPorts 生成包含端口扫描结果的 Excel 报告（合并表格）
-// 对于端口结果，将 "IP:Port" 写入 URL 列，其他列留空
-func GenerateExcelReportWithPorts(filterResult *interfaces.FilterResult, reportType ExcelReportType, ports []types.OpenPortResult, outputPath string) (string, error) {
-	if filterResult == nil {
-		return "", fmt.Errorf("过滤结果为空")
-	}
-
-	logger.Debugf("开始生成包含端口结果的 Excel 报告: %s", outputPath)
-
-	rows := buildExcelRows(filterResult, reportType)
-
-	headers := excelHeaders(reportType)
-
-	// 将端口扫描结果附加到行尾
-	if len(ports) > 0 {
-		// 端口结果使用 URL 列，其他列置空
-		colCount := len(headers)
-		for _, r := range ports {
-			row := make([]interface{}, colCount)
-			if colCount > 0 {
-				label := fmt.Sprintf("%s:%d", r.IP, r.Port)
-				if strings.TrimSpace(r.Service) != "" {
-					label = fmt.Sprintf("%s (%s)", label, strings.TrimSpace(r.Service))
-				}
-				row[0] = label
-			}
-			rows = append(rows, row)
-		}
-	}
-
-	file := excelize.NewFile()
-	sheetName := "Report"
-	file.SetSheetName(file.GetSheetName(0), sheetName)
-
-	for idx, header := range headers {
-		cell, _ := excelize.CoordinatesToCellName(idx+1, 1)
-		file.SetCellValue(sheetName, cell, header)
-	}
-
-	for rowIdx, row := range rows {
-		cell, _ := excelize.CoordinatesToCellName(1, rowIdx+2)
-		rowCopy := row
-		file.SetSheetRow(sheetName, cell, &rowCopy)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return "", fmt.Errorf("创建输出目录失败: %w", err)
-	}
-	if err := file.SaveAs(outputPath); err != nil {
-		return "", fmt.Errorf("保存 Excel 报告失败: %w", err)
-	}
 	logger.Infof("Excel Report: %s", outputPath)
 	return outputPath, nil
 }
@@ -202,34 +146,4 @@ func sanitizeSnippet(snippet string) string {
 
 // GeneratePortscanExcel 生成端口扫描 Excel 报告
 // 输出列：IP, Port
-func GeneratePortscanExcel(results []types.OpenPortResult, outputPath string) (string, error) {
-	f := excelize.NewFile()
-	sheet := "PortScan"
-	f.SetSheetName(f.GetSheetName(0), sheet)
-
-	headers := []string{"IP", "Port", "Service"}
-	for i, h := range headers {
-		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheet, cell, h)
-	}
-
-	for idx, r := range results {
-		ipCell, _ := excelize.CoordinatesToCellName(1, idx+2)
-		portCell, _ := excelize.CoordinatesToCellName(2, idx+2)
-		serviceCell, _ := excelize.CoordinatesToCellName(3, idx+2)
-		f.SetCellValue(sheet, ipCell, r.IP)
-		f.SetCellValue(sheet, portCell, r.Port)
-		if r.Service != "" {
-			f.SetCellValue(sheet, serviceCell, r.Service)
-		}
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return "", fmt.Errorf("创建输出目录失败: %w", err)
-	}
-	if err := f.SaveAs(outputPath); err != nil {
-		return "", fmt.Errorf("保存 Excel 失败: %w", err)
-	}
-	logger.Debugf("Excel报告已生成: %s", outputPath)
-	return outputPath, nil
-}
+// 端口扫描模块已移除，Excel 报告不再包含端口结果

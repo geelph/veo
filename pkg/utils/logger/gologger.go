@@ -11,9 +11,7 @@ import (
 	"github.com/projectdiscovery/gologger/levels"
 )
 
-// ===========================================
 // veo日志系统 - gologger兼容层
-// ===========================================
 
 // Formatter veo自定义日志格式化器
 // 由于gologger的API限制，我们使用一个简化的方法来实现自定义格式
@@ -38,9 +36,7 @@ type Logger struct {
 // 全局日志实例
 var globalLogger *Logger
 
-// ===========================================
 // 初始化和配置
-// ===========================================
 
 // InitializeLogger 初始化日志系统
 func InitializeLogger(config *LogConfig) error {
@@ -122,9 +118,7 @@ func getDefaultLogConfig() *LogConfig {
 	}
 }
 
-// ===========================================
 // logrus兼容API - 基础日志方法
-// ===========================================
 
 // Info 信息级别日志
 func (l *Logger) Info(args ...interface{}) {
@@ -242,9 +236,7 @@ func (l *Logger) printWithFormat(level levels.Level, message string) {
 	}
 }
 
-// ===========================================
 // 全局日志函数 - 兼容logrus的全局调用方式
-// ===========================================
 
 // Info 全局信息日志
 func Info(args ...interface{}) {
@@ -347,9 +339,7 @@ func Fatalf(format string, args ...interface{}) {
 	}
 }
 
-// ===========================================
 // 工具函数
-// ===========================================
 
 // GetGlobalLogger 获取全局日志实例
 func GetGlobalLogger() *Logger {
@@ -380,9 +370,7 @@ func IsDebugEnabled() bool {
 	return true // 简化实现，总是返回true
 }
 
-// ===========================================
 // 兼容性函数 - 支持现有代码的平滑迁移
-// ===========================================
 
 // InitializeLogging 兼容原有的初始化函数名
 func InitializeLogging(config *LogConfig) error {

@@ -2,11 +2,9 @@ package dirscan
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
@@ -102,7 +100,7 @@ type ResponseFilter struct {
 	mu                sync.RWMutex              // 读写锁
 
 	// [新增] 可选的指纹识别引擎（用于目录扫描结果的二次识别）
-	fingerprintEngine      interface{}
+	fingerprintEngine      interfaces.FingerprintAnalyzer
 	showFingerprintSnippet bool
 	showFingerprintRule    bool
 }
@@ -139,7 +137,7 @@ func NewResponseFilter(config *FilterConfig) *ResponseFilter {
 }
 
 // SetFingerprintEngine 设置指纹识别引擎（可选，用于目录扫描结果的二次识别）
-func (rf *ResponseFilter) SetFingerprintEngine(engine interface{}) {
+func (rf *ResponseFilter) SetFingerprintEngine(engine interfaces.FingerprintAnalyzer) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.fingerprintEngine = engine
@@ -530,42 +528,35 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 		rf.mu.RUnlock()
 
 		var (
-			matches        []interfaces.FingerprintMatch
-			fingerprintStr string
+			matches          []interfaces.FingerprintMatch
+			fingerprintUnion string
 		)
 
 		// 先执行指纹识别，以便根据结果决定标题颜色
 		if hasEngine {
-			matches, fingerprintStr = rf.performFingerprintRecognition(page)
+			matches, fingerprintUnion = rf.performFingerprintRecognition(page)
 			if len(matches) > 0 {
 				page.Fingerprints = matches
 			}
 		}
 
-		// 根据是否匹配到指纹选择不同的标题格式化函数
-		var titleFormatted string
-		if len(matches) > 0 {
-			// 匹配到指纹：浅绿色，不加粗
-			titleFormatted = formatter.FormatFingerprintTitle(page.Title)
-		} else {
-			// 未匹配到指纹：默认格式
-			titleFormatted = formatTitle(page.Title)
+		fingerprintParts := []string{}
+		if strings.TrimSpace(fingerprintUnion) != "" {
+			fingerprintParts = append(fingerprintParts, fingerprintUnion)
 		}
 
-		baseInfo := fmt.Sprintf("%s %s %s %s %s",
-			formatURL(page.URL),
-			formatStatusCode(page.StatusCode),
-			titleFormatted,
-			formatContentLength(int(page.ContentLength)),
-			formatContentType(page.ContentType),
+		line := formatter.FormatLogLine(
+			page.URL,
+			page.StatusCode,
+			page.Title,
+			page.ContentLength,
+			page.ContentType,
+			fingerprintParts,
+			len(matches) > 0,
 		)
 
 		var messageBuilder strings.Builder
-		messageBuilder.WriteString(baseInfo)
-		if fingerprintStr != "" {
-			messageBuilder.WriteString(" ")
-			messageBuilder.WriteString(fingerprintStr)
-		}
+		messageBuilder.WriteString(line)
 
 		if rf.showFingerprintSnippet && len(matches) > 0 {
 			var snippetLines []string
@@ -612,255 +603,52 @@ func (rf *ResponseFilter) performFingerprintRecognition(page *interfaces.HTTPRes
 		return nil, ""
 	}
 
-	// 使用反射调用指纹引擎的方法（避免循环依赖）
-	engineValue := reflect.ValueOf(engine)
+	// 转换响应格式（解压响应体）
+	// 注意：这里不再需要 convertToFingerprintResponse，因为接口已统一使用 interfaces.HTTPResponse
+	// 但我们需要确保响应体是解压后的
+	decompressedBody := rf.decompressResponseBody(page.Body, page.ResponseHeaders)
 
-	// 检查是否有 AnalyzeResponseWithClientSilent 方法
-	method := engineValue.MethodByName("AnalyzeResponseWithClientSilent")
-	if !method.IsValid() {
-		logger.Debugf("指纹引擎没有 AnalyzeResponseWithClientSilent 方法")
-		return nil, ""
-	}
-
-	// 转换响应格式
-	fpResponse := rf.convertToFingerprintResponse(page)
-	if fpResponse == nil {
-		logger.Debugf("响应转换失败: %s", page.URL)
-		return nil, ""
-	}
+	// 创建临时响应对象，避免修改原始对象
+	analysisResp := *page
+	analysisResp.Body = decompressedBody
 
 	logger.Debugf("开始识别: %s", page.URL)
 
-	// 使用反射调用方法
-	// 第二个参数是 httpClient，传递 nil
-	var nilClient interface{} = nil
-	args := []reflect.Value{
-		reflect.ValueOf(fpResponse),
-		reflect.ValueOf(&nilClient).Elem(), // nil interface{}
+	// 直接调用接口方法
+	matches := engine.AnalyzeResponseWithClientSilent(&analysisResp, nil)
+
+	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, len(matches))
+
+	// 将 []*FingerprintMatch 转换为 []FingerprintMatch
+	convertedMatches := make([]interfaces.FingerprintMatch, len(matches))
+	for i, m := range matches {
+		if m != nil {
+			convertedMatches[i] = *m
+		}
 	}
-	results := method.Call(args)
-
-	// 检查返回值
-	if len(results) == 0 {
-		logger.Debugf("方法调用无返回值")
-		return nil, ""
-	}
-
-	matchesInterface := results[0].Interface()
-
-	// 使用反射获取切片长度
-	matchesValue := reflect.ValueOf(matchesInterface)
-	if matchesValue.Kind() != reflect.Slice {
-		logger.Debugf("返回值不是切片类型: %v", matchesValue.Kind())
-		return nil, ""
-	}
-
-	logger.Debugf("识别完成: %s, 匹配数量: %d", page.URL, matchesValue.Len())
-
-	convertedMatches := rf.convertMatchesToInterfaces(matchesValue, rf.showFingerprintRule, rf.showFingerprintSnippet)
 
 	// 格式化指纹信息
-	return convertedMatches, rf.formatFingerprintMatches(matchesInterface)
+	return convertedMatches, rf.formatFingerprintMatches(matches)
 }
 
-// convertToFingerprintResponse 将interfaces.HTTPResponse转换为fingerprint.HTTPResponse
-// 使用反射创建正确的类型，避免类型不匹配
-func (rf *ResponseFilter) convertToFingerprintResponse(resp *interfaces.HTTPResponse) interface{} {
-	if resp == nil {
-		return nil
-	}
-
-	// 优先使用ResponseBody字段，如果为空则使用Body字段
-	body := resp.ResponseBody
-	if body == "" {
-		body = resp.Body
-	}
-
-	// [关键修复] 解压缩响应体（如果被压缩）
-	decompressedBody := rf.decompressResponseBody(body, resp.ResponseHeaders)
-
-	// 截取前100个字符用于调试
-	bodyPreview := decompressedBody
-	if len(bodyPreview) > 100 {
-		bodyPreview = bodyPreview[:100]
-	}
-	logger.Debugf("转换响应: %s, 原始长度: %d, 解压后长度: %d, 前100字符: %s",
-		resp.URL, len(body), len(decompressedBody), bodyPreview)
-
-	// 使用反射获取指纹引擎的类型
-	rf.mu.RLock()
-	engine := rf.fingerprintEngine
-	rf.mu.RUnlock()
-
-	if engine == nil {
-		return nil
-	}
-
-	// 通过反射获取 fingerprint.HTTPResponse 类型
-	engineValue := reflect.ValueOf(engine)
-	engineType := engineValue.Type()
-
-	// 查找 AnalyzeResponseWithClientSilent 方法
-	method, found := engineType.MethodByName("AnalyzeResponseWithClientSilent")
-	if !found {
-		logger.Debugf("未找到 AnalyzeResponseWithClientSilent 方法")
-		return nil
-	}
-
-	// 获取第一个参数的类型（应该是 *fingerprint.HTTPResponse）
-	if method.Type.NumIn() < 2 { // 第0个是receiver
-		logger.Debugf("方法参数数量不足")
-		return nil
-	}
-
-	// 第1个参数（索引1，因为0是receiver）
-	paramType := method.Type.In(1)
-
-	// 如果是指针类型，获取元素类型
-	if paramType.Kind() == reflect.Ptr {
-		paramType = paramType.Elem()
-	}
-
-	// 创建该类型的新实例
-	newResp := reflect.New(paramType)
-	newRespElem := newResp.Elem()
-
-	// 使用反射设置字段值
-	if field := newRespElem.FieldByName("URL"); field.IsValid() && field.CanSet() {
-		field.SetString(resp.URL)
-	}
-	if field := newRespElem.FieldByName("Method"); field.IsValid() && field.CanSet() {
-		field.SetString("GET")
-	}
-	if field := newRespElem.FieldByName("StatusCode"); field.IsValid() && field.CanSet() {
-		field.SetInt(int64(resp.StatusCode))
-	}
-	if field := newRespElem.FieldByName("ResponseHeaders"); field.IsValid() && field.CanSet() {
-		field.Set(reflect.ValueOf(resp.ResponseHeaders))
-	}
-	if field := newRespElem.FieldByName("Body"); field.IsValid() && field.CanSet() {
-		field.SetString(decompressedBody) // 使用解压缩后的内容
-	}
-	if field := newRespElem.FieldByName("ContentType"); field.IsValid() && field.CanSet() {
-		field.SetString(resp.ContentType)
-	}
-	if field := newRespElem.FieldByName("ContentLength"); field.IsValid() && field.CanSet() {
-		field.SetInt(resp.ContentLength)
-	}
-	if field := newRespElem.FieldByName("Server"); field.IsValid() && field.CanSet() {
-		field.SetString(resp.Server)
-	}
-	if field := newRespElem.FieldByName("Title"); field.IsValid() && field.CanSet() {
-		field.SetString(resp.Title)
-	}
-
-	logger.Debugf("成功创建类型: %v", newResp.Type())
-	return newResp.Interface()
-}
-
-func (rf *ResponseFilter) convertMatchesToInterfaces(matchesValue reflect.Value, includeRule, includeSnippet bool) []interfaces.FingerprintMatch {
-	count := matchesValue.Len()
-	if count == 0 {
-		return nil
-	}
-	_ = includeRule
-
-	results := make([]interfaces.FingerprintMatch, 0, count)
-	for i := 0; i < count; i++ {
-		item := matchesValue.Index(i)
-		if !item.IsValid() {
-			continue
-		}
-		if item.Kind() == reflect.Pointer {
-			if item.IsNil() {
-				continue
-			}
-			item = item.Elem()
-		}
-		if item.Kind() != reflect.Struct {
-			continue
-		}
-
-		match := interfaces.FingerprintMatch{}
-
-		if field := item.FieldByName("URL"); field.IsValid() && field.Kind() == reflect.String {
-			match.URL = field.String()
-		}
-		if field := item.FieldByName("RuleName"); field.IsValid() && field.Kind() == reflect.String {
-			match.RuleName = field.String()
-		}
-		if field := item.FieldByName("DSLMatched"); field.IsValid() && field.Kind() == reflect.String {
-			match.Matcher = field.String()
-		}
-		if field := item.FieldByName("Timestamp"); field.IsValid() {
-			switch field.Kind() {
-			case reflect.Int, reflect.Int64, reflect.Int32:
-				match.Timestamp = time.Unix(field.Int(), 0)
-			case reflect.Struct:
-				if field.Type().String() == "time.Time" {
-					if t, ok := field.Interface().(time.Time); ok {
-						match.Timestamp = t
-					}
-				}
-			}
-		}
-		if includeSnippet {
-			if field := item.FieldByName("Snippet"); field.IsValid() && field.Kind() == reflect.String {
-				match.Snippet = field.String()
-			}
-		}
-
-		results = append(results, match)
-	}
-
-	return results
-}
-
-// formatFingerprintMatches 格式化指纹匹配结果（使用反射避免循环依赖）
-func (rf *ResponseFilter) formatFingerprintMatches(matchesInterface interface{}) string {
-	if matchesInterface == nil {
+// formatFingerprintMatches 格式化指纹匹配结果
+func (rf *ResponseFilter) formatFingerprintMatches(matches []*interfaces.FingerprintMatch) string {
+	if len(matches) == 0 {
 		return ""
 	}
 
-	// 使用反射处理切片
-	matchesValue := reflect.ValueOf(matchesInterface)
-	if matchesValue.Kind() != reflect.Slice {
-		logger.Debugf("匹配结果不是切片类型")
-		return ""
-	}
-
-	matchCount := matchesValue.Len()
-	if matchCount == 0 {
-		return ""
-	}
-
-	logger.Debugf("格式化 %d 个匹配结果", matchCount)
+	logger.Debugf("格式化 %d 个匹配结果", len(matches))
 
 	var parts []string
-	for i := 0; i < matchCount; i++ {
-		match := matchesValue.Index(i)
-
-		// 如果是指针，解引用
-		if match.Kind() == reflect.Ptr {
-			match = match.Elem()
-		}
-
-		// 使用反射读取字段
-		ruleNameField := match.FieldByName("RuleName")
-		dslMatchedField := match.FieldByName("DSLMatched")
-
-		if !ruleNameField.IsValid() || !dslMatchedField.IsValid() {
-			logger.Debugf("无法读取字段: RuleName或DSLMatched")
+	for _, match := range matches {
+		if match == nil {
 			continue
 		}
 
-		ruleName := ruleNameField.String()
-		dslMatched := dslMatchedField.String()
-
-		display := formatter.FormatFingerprintDisplay(ruleName, dslMatched, rf.showFingerprintRule)
+		display := formatter.FormatFingerprintDisplay(match.RuleName, match.Matcher, rf.showFingerprintRule)
 		if display != "" {
 			parts = append(parts, display)
-			logger.Debugf("匹配: %s - %s", ruleName, dslMatched)
+			logger.Debugf("匹配: %s - %s", match.RuleName, match.Matcher)
 		}
 	}
 

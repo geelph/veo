@@ -2,9 +2,9 @@ package console
 
 import (
 	"runtime"
-	"veo/pkg/utils/logger"
-	"veo/pkg/fingerprint"
 	collector "veo/pkg/dirscan"
+	"veo/pkg/fingerprint"
+	"veo/pkg/utils/logger"
 )
 
 // WorkMode 工作模式类型
@@ -144,9 +144,7 @@ func (cm *ConsoleManager) SetCurrentMode(mode WorkMode) {
 	cm.currentMode = mode
 }
 
-// ===========================================
 // 日志相关
-// ===========================================
 
 // Windows ANSI support state
 var (

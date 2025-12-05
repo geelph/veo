@@ -4,9 +4,7 @@ import (
 	"time"
 )
 
-// ===========================================
 // Common Types for Modules
-// ===========================================
 
 // HTTPResponse represents an HTTP response, used across modules.
 type HTTPResponse struct {

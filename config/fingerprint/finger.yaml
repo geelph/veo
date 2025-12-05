@@ -64,10 +64,6 @@ apache-oozie-web-console:
   dsl:
     - "contains(body, 'href=\"/oozie\">oozie console')"
 
-apache-shiro:
-  dsl:
-    - "contains(body, '</i> shiro</li>')"
-
 apache-skywalking:
   dsl:
     - "contains(body, \"sorry but SkyWalking doesn't work\")"
@@ -1919,7 +1915,7 @@ asp-net-api:
 
 章管家:
   dsl:
-    - "contains(body, '/web/setcookie/i18n.htm')"
+    - "contains(body, '/web/setcookie/i18n.htm','章管家登录','章管家,印章管理','i18nparse')"
 
 海康威视综合安防:
   dsl:
@@ -1960,12 +1956,12 @@ REALOR瑞友天翼虚拟化系统:
 
 kkfileview:
   dsl:
-    - "contains(body, 'kkview.cn')"
+    - "contains(body, 'kkview.cn','09ZHSXbsQ','kkFileView','上传的文件不能超过500MB喔！！！','daxiao.replace')"
     - "contains(body, 'theme-showcase')"
 
 阿里云waf:
   dsl:
-    - "contains(body, 'block_traceid_tips')"
+    - "contains(body, 'block_traceid_tips','errors.aliyun.com/images/','g.alicdn.com/sd-base/')"
 
 metacrm:
   dsl:
@@ -2095,11 +2091,13 @@ nacos:
     - "contains(body, 'console-ui/public/img/favicon.ico')"
 
 minio:
+  path: "/minio"
   dsl:
-    - "contains(body, '<title>MinIO Console</title>')"
-    - "contains(body, 'background-wave-orig2.svg')"
+    - "contains(body, 'MinIO Console','Minio Browser')"
+    - "contains(body, 'background-wave-orig2.svg','currentUiVersion')"
     - "contains(body, '/minio/loader.css')"
     - "contains(body, '/minio/logo.svg')"
+    - "contains(header, 'Minio')"
 
 zabbix:
   dsl:
@@ -2108,7 +2106,8 @@ zabbix:
 禅道:
   dsl:
     - "contains(header, 'zentaosid')"
-    - "contains(body, '/theme/default/images/main/zt-logo.png')"
+    - "contains(body, '/theme/default/images/main/zt-logo.png','#zentaomax','#zentaobiz')"
+    - "contains(url, 'zentao/user')"
 
 启明星辰天清汉马USG防火墙:
   dsl:
@@ -2160,12 +2159,14 @@ shiro:
     - "contains(header, 'rememberMe=')"
     - "contains(header, '=deleteMe')"
     - "contains(body, 'rememberme=')"
+    - "contains(body, '</i> shiro</li>')"
 
 phpsessid:
   dsl:
     - "contains(header, 'PHPSESSID=')"
 
 thinkphp:
+  path: "/?a=WKtwuea&c=2RVM&m=fv3C&s=ba5a"
   dsl:
     - "icon('/favicon.ico', 'f49c4a4bde1eec6c0b80c2277c76e3db')"
     - "contains(header, 'ThinkPHP')"
@@ -2569,19 +2570,6 @@ tamronos-iptv系统:
     - "contains(body, 'TamronOS')"
     - "contains(body, 'tamronos.com')"
 
-teleport-堡垒机:
-  dsl:
-    - "contains(body, 'TELEPORT')"
-    - "contains(body, 'login-account')"
-    - "contains(body, 'login-type-oath')"
-
-tencent-exmail:
-  dsl:
-    - "contains(header, 'ssl_edition=mail.qq.com')"
-    - "contains(body, 'cgi-bin/getinvestigate?flowid=')"
-    - "contains(body, 'cgi-bin/bizmail_portal')"
-
-
 turbomail-邮件系统:
   dsl:
     - "contains(body, 'TurboMail')"
@@ -2748,10 +2736,6 @@ yzmcms:
   dsl:
     - "contains(body, '/SouthUIContent/themes/easydropdown.css')"
 
-博华网龙信息安全一体机:
-  dsl:
-    - "title('博华网龙信息安全一体机')"
-
 厦门快普:
   dsl:
     - "contains(body, 'jKPM6')"
@@ -2870,15 +2854,7 @@ yzmcms:
 
 宝塔:
   dsl:
-    - "contains(body, '入口校验失败')"
-    - "contains(body, '<title>恭喜，站点创建成功')"
-    - "contains(body, '面板系统后台')"
-    - "contains(body, '系统自动生成')"
-    - "contains(body, '扫码登录更安全')"
-    - "contains(body, 'bt.cn')"
-    - "contains(body, '站点创建成功')"
-    - "contains(body, '宝塔')"
-    - "contains(body, '宝塔Linux面板')"
+    - "contains(body, '入口校验失败','您没有将此域名或IP绑定到对应站点!','<title>恭喜，站点创建成功','面板系统后台','系统自动生成','您的请求在Web服务器中没有找到对应的站点','站点创建成功','宝塔Linux面板')"
 
 富通天下外贸erp:
   dsl:
@@ -2889,10 +2865,10 @@ yzmcms:
     - "contains(body, 'font_1957344_lqkodjqdbl.css')"
     - "contains(body, 'static_source/localcdn/webrtc/web/favicon.ico')"
 
-山石网科-防火墙:
+山石网科产品:
   dsl:
     - "contains(body, 'Hillstone')"
-    - "contains(body, 'licenseAggrement')"
+    - "contains(body, 'licenseAggrement','title>Secure Connect')"
     - "contains(body, 'GLOBAL_CONFIG.js')"
 
 山石网科云数据库审计与防护系统:
@@ -2902,7 +2878,7 @@ yzmcms:
 
 广联达-glodon:
   dsl:
-    - "contains(body, '/ConsoleCommon/Content/weebox.css')"
+    - "contains(body, '/ConsoleCommon/Content/weebox.css','JS/DD_belatedPNG.js','/Services/Identification/login.ashx')"
 
 广联达-广讯通:
   dsl:
@@ -3447,3 +3423,19 @@ ArcGIS:
 新点OA:
   dsl:
   - "contains(body, '新点政务','epoint','loginaction/getLoginData')"
+
+next.js:
+  dsl:
+  - "contains(body, '/_next/static/chunks/app/','/_next/')"
+
+React Server:
+  dsl:
+  - "contains(body, 'React.createElement','react.production.min.js')"
+
+疑似文件上传表单:
+  dsl:
+  - "contains(body, 'enctype=\"multipart/form-data\"','input type=\"file\"','placeholder=\"请选择文件\"')"
+
+SOAP:
+  dsl:
+  - "contains(body, 'soapenv:Envelope','soapenv:Body','soap-env:envelope','soap-env:Body')"

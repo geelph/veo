@@ -1,8 +1,8 @@
 package redirect
 
 import (
-	"testing"
 	"fmt"
+	"testing"
 )
 
 func TestDetectClientRedirectURL_Complex(t *testing.T) {
@@ -31,6 +31,13 @@ func TestDetectClientRedirectURL_Complex(t *testing.T) {
 			body:     `<meta http-equiv="refresh" content="0;url=http://example.com/noquotes">`,
 			expected: "http://example.com/noquotes",
 		},
+		{
+			name: "User Provided IIS Object Moved",
+			body: `<html><head><title>Object moved</title></head><body>
+<h2>Object moved to <a href="/Services/Identification/login.ashx?ReturnUrl=%2f">here</a>.</h2>
+</body></html>`,
+			expected: "/Services/Identification/login.ashx?ReturnUrl=%2f",
+		},
 	}
 
 	for _, tt := range tests {
@@ -44,4 +51,3 @@ func TestDetectClientRedirectURL_Complex(t *testing.T) {
 		})
 	}
 }
-

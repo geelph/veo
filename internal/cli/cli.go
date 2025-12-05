@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -11,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,18 +18,11 @@ import (
 	modulepkg "veo/pkg/core/module"
 	"veo/pkg/dirscan"
 	fpaddon "veo/pkg/fingerprint"
-	portconfig "veo/pkg/portscan"
 	"veo/pkg/utils/formatter"
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/processor/auth"
 	"veo/proxy"
-
-	// "os/exec" // removed: masscan执行迁移至模块
-	portscanpkg "veo/pkg/portscan"
-	gogoscanner "veo/pkg/portscan/gogo"
-	portservice "veo/pkg/portscan/service"
-	report "veo/pkg/reporter"
 )
 
 // arrayFlags 实现flag.Value接口，支持多个相同参数
@@ -53,14 +43,10 @@ type CLIArgs struct {
 	TargetFile string   // 新增：目标文件路径 (-l)
 	Modules    []string // 启用的模块 (-m)
 	Port       int      // 监听端口 (--lp)
-	// 端口扫描（masscan）相关
-	Ports     string // 扫描端口表达式 (-p 例如: 80,443,8000-8100 或 1-65535)
-	Rate      int    // 扫描速率 (--rate，包/秒)
-	PortRetry int    // 端口扫描重试次数 (-pr/--port-retry)
-	Wordlist  string // 自定义字典路径 (-w)
-	Listen    bool   // 被动代理模式 (--listen)
-	Proxy     string // 上游代理地址 (--proxy)
-	Debug     bool   // 调试模式 (--debug)
+	Wordlist   string   // 自定义字典路径 (-w)
+	Listen     bool     // 被动代理模式 (--listen)
+	Proxy      string   // 上游代理地址 (--proxy)
+	Debug      bool     // 调试模式 (--debug)
 
 	// 新增：线程并发控制和全局配置参数
 	Threads int // 统一线程并发数量 (-t, --threads)
@@ -74,14 +60,13 @@ type CLIArgs struct {
 	Stats bool // 启用实时扫描进度统计显示 (--stats)
 
 	// 输出控制
-	NoColor    bool // 禁用彩色输出 (-nc)
-	JSONOutput bool // 控制台输出JSON结果 (--json)
+	NoColor      bool // 禁用彩色输出 (-no-color)
+	NetworkCheck bool // 启用存活性检测 (-nc)
+	JSONOutput   bool // 控制台输出JSON结果 (--json)
 
 	// 指纹细节输出开关
-	Verbose            bool // 指纹匹配规则展示开关 (-v)
-	VeryVerbose        bool // 指纹匹配内容展示开关 (-vv)
-	NoAliveCheck       bool // 跳过存活检测 (-na)
-	EnableServiceProbe bool // 启用端口服务识别 (默认开启，-sV 关闭)
+	Verbose     bool // 指纹匹配规则展示开关 (-v)
+	VeryVerbose bool // 指纹匹配内容展示开关 (-vv)
 
 	// 新增：HTTP认证头部参数
 	Headers []string // 自定义HTTP认证头部 (--header "Header-Name: Header-Value")
@@ -94,13 +79,10 @@ type CLIArgs struct {
 
 	// 新增：随机User-Agent控制
 	RandomUA bool // 是否启用随机User-Agent (-ua, 默认启用)
-
-	// 内部：端口优先模式标记
-	PortFirst bool
 }
 
 // ValidModules 有效的模块列表（使用module包的类型定义）
-var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan), "port"}
+var ValidModules = []string{string(modulepkg.ModuleFinger), string(modulepkg.ModuleDirscan)}
 
 // CLIApp CLI应用程序
 type CLIApp struct {
@@ -144,7 +126,6 @@ func Execute() {
 
 	// 解析命令行参数
 	args := ParseCLIArgs()
-	args.PortFirst = shouldUsePortFirst(args)
 
 	// 应用CLI参数到配置（包括--debug标志）
 	applyArgsToConfig(args)
@@ -152,21 +133,7 @@ func Execute() {
 	//  提前显示启动信息，确保banner在所有日志输出之前显示
 	displayStartupInfo(args)
 
-	// 仅端口扫描模式：-m port
-	if !args.Listen && args.HasModule("port") && len(args.Modules) == 1 {
-		if _, _, err := resolvePortExpression(args); err != nil {
-			logger.Fatalf("端口扫描参数错误: %v", err)
-		}
-		if err := runMasscanPortScan(args); err != nil {
-			logger.Fatalf("端口扫描失败: %v", err)
-		}
-		return
-	}
-
-	// 保持既有逻辑：不携带 -p 时，按原有模块执行（目录扫描+指纹识别）。
-	// 若携带 -p，则先执行正常扫描（目录扫描+指纹识别），结束后再执行端口扫描。
-
-	// 初始化应用程序（仅当非端口扫描场景）
+	// 初始化应用程序
 	var err error
 	app, err = initializeApp(args)
 	if err != nil {
@@ -186,16 +153,6 @@ func Execute() {
 		if err := runActiveScanMode(args); err != nil {
 			logger.Fatalf("主动扫描失败: %v", err)
 		}
-		reportPath := strings.TrimSpace(args.Output)
-		// 若启用端口模块，则在正常扫描完成后执行端口扫描（仅当未输出合并JSON文件时）
-		if args.HasModule("port") && !args.PortFirst && !args.JSONOutput && !strings.HasSuffix(strings.ToLower(reportPath), ".json") {
-			if _, _, err := resolvePortExpression(args); err != nil {
-				logger.Fatalf("端口扫描参数错误: %v", err)
-			}
-			if err := runMasscanPortScan(args); err != nil {
-				logger.Fatalf("端口扫描失败: %v", err)
-			}
-		}
 	}
 }
 
@@ -206,8 +163,6 @@ func ParseCLIArgs() *CLIArgs {
 		targetFile = flag.String("l", "", "目标文件路径，每行一个目标 (例如: -l targets.txt)")
 		modulesStr = flag.String("m", "", "启用的模块，多个模块用逗号分隔 (例如: -m finger,dirscan)")
 		localPort  = flag.Int("lp", 9080, "本地代理监听端口，仅在被动模式下使用 (默认: 9080)")
-		portsArg   = flag.String("p", "", "端口范围或字典名称，如 80,443,8000-8100 / web / service / top1000 / all")
-		rateArg    = flag.Int("rate", 0, "端口扫描速率(包/秒)，仅在启用端口扫描时使用 (例如: --rate 10000)")
 		wordlist   = flag.String("w", "", "自定义字典文件路径 (例如: -w /path/to/custom.txt)")
 		listen     = flag.Bool("listen", false, "启用被动代理模式 (默认: 主动扫描模式)")
 		proxy      = flag.String("proxy", "", "设置上游代理 (例如: http://127.0.0.1:8080 或 socks5://127.0.0.1:1080)")
@@ -217,8 +172,6 @@ func ParseCLIArgs() *CLIArgs {
 		threads     = flag.Int("t", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
 		threadsLong = flag.Int("threads", 0, "统一线程并发数量，对所有模块生效 (默认: 200)")
 		retry       = flag.Int("retry", 0, "扫描失败目标的重试次数 (默认: 1)")
-		portRetry   = flag.Int("pr", 0, "端口扫描超时重试次数 (默认: 0，仅在超时时重试)")
-		portRetryL  = flag.Int("port-retry", 0, "端口扫描超时重试次数 (默认: 0，仅在超时时重试)")
 		timeout     = flag.Int("timeout", 0, "全局连接超时时间(秒)，对所有模块生效 (默认: 3)")
 
 		// 新增：报告输出控制参数
@@ -229,10 +182,9 @@ func ParseCLIArgs() *CLIArgs {
 		stats        = flag.Bool("stats", false, "启用实时扫描进度统计显示")
 		verbose      = flag.Bool("v", false, "显示指纹匹配规则内容 (默认关闭，可使用 -v 开启)")
 		veryVerbose  = flag.Bool("vv", false, "显示指纹匹配规则与内容片段 (默认关闭，可使用 -vv 开启)")
-		noColor      = flag.Bool("nc", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
+		noColor      = flag.Bool("no-color", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
+		networkCheck = flag.Bool("nc", false, "启用存活性检测 (默认关闭)")
 		jsonOutput   = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
-		noAlive      = flag.Bool("na", false, "跳过扫描前的存活检测 (默认进行存活检测)")
-		serviceProbe = flag.Bool("sV", false, "禁用端口服务识别 (默认开启)")
 
 		// 新增：状态码过滤参数
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
@@ -266,26 +218,22 @@ func ParseCLIArgs() *CLIArgs {
 	args := &CLIArgs{
 		TargetFile: *targetFile,
 		Port:       *localPort,
-		Ports:      *portsArg,
-		Rate:       *rateArg,
 		Wordlist:   *wordlist,
 		Listen:     *listen,
 		Proxy:      *proxy,
 		Debug:      *debug,
 
 		// 新增参数处理：支持短参数和长参数
-		Threads:            getMaxInt(*threads, *threadsLong),
-		Retry:              *retry,
-		PortRetry:          getMaxInt(*portRetry, *portRetryL),
-		Timeout:            *timeout,
-		Output:             getStringValue(*output, *outputLong),
-		Stats:              *stats,
-		Verbose:            *verbose,
-		VeryVerbose:        *veryVerbose,
-		NoColor:            *noColor,
-		JSONOutput:         *jsonOutput,
-		NoAliveCheck:       *noAlive,
-		EnableServiceProbe: !*serviceProbe,
+		Threads:      getMaxInt(*threads, *threadsLong),
+		Retry:        *retry,
+		Timeout:      *timeout,
+		Output:       getStringValue(*output, *outputLong),
+		Stats:        *stats,
+		Verbose:      *verbose,
+		VeryVerbose:  *veryVerbose,
+		NoColor:      *noColor,
+		NetworkCheck: *networkCheck,
+		JSONOutput:   *jsonOutput,
 
 		// 新增：HTTP认证头部参数
 		Headers: []string(headers),
@@ -367,29 +315,21 @@ veo - 端口扫描/指纹识别/目录扫描
 目标与模块:
   -u string            目标列表，逗号分隔；支持 URL / 域名 / host:port / CIDR / IP 范围
   -l string            目标文件，每行一个目标；支持空行和 # 注释
-  -m string            启用模块，默认 finger,dirscan。可选 finger / dirscan / port
+  -m string            启用模块，默认 finger,dirscan。可选 finger / dirscan
   --listen             被动代理模式；配合 --lp 指定监听端口（默认 9080）
-
-端口扫描:
-  -p string            端口表达式，例如 80,443,8000-8100
-  -pw string           端口字典文件或预设(top/web/service)，未指定 -p 时使用
-  --rate int           探测速率，默认 2048；大于 2048 时按 2048 为一批运行
-  -sV                  禁用服务识别（默认开启，可省略该参数）
-
 扫描控制:
   --debug              输出调试日志
   --stats              显示实时统计信息
   -v                   显示指纹匹配规则内容
-  -na                  跳过存活检测
   -vv                  显示指纹匹配规则及匹配片段
-  -nc                  禁用彩色输出
+  -nc                  启用存活性检测 (默认关闭)
+  -no-color            禁用彩色输出
   --json               控制台输出 JSON
   -ua bool             是否启用随机User-Agent 池 (默认 true，使用 -ua=false 关闭)
 
 性能调优:
   -t, --threads int    全局并发线程数（默认 200）
   --retry int          失败重试次数（默认 1）
-  -pr, --port-retry int 端口扫描超时重试次数（默认 0）
   --timeout int        全局超时时间（秒，默认 3）
 
 目录扫描:
@@ -406,7 +346,6 @@ veo - 端口扫描/指纹识别/目录扫描
 
 示例:
   %[1]s -u https://target.com -m finger,dirscan
-  %[1]s -u 1.1.1.1 -m port -p 1-65535 -sV --rate 10000
   %[1]s -l targets.txt -m finger,dirscan --stats
   %[1]s -u target.com --listen --lp 8080
 
@@ -446,13 +385,6 @@ func validateArgs(args *CLIArgs) error {
 		return fmt.Errorf("端口必须在1-65535范围内，当前值: %d", args.Port)
 	}
 
-	// 当指定端口扫描时进行基础校验
-	if strings.TrimSpace(args.Ports) != "" {
-		if len(args.Targets) == 0 && strings.TrimSpace(args.TargetFile) == "" {
-			return fmt.Errorf("端口扫描需要通过 -u 或 -l 指定目标")
-		}
-	}
-
 	// 验证线程并发数量
 	if args.Threads < 0 || args.Threads > 1000 {
 		return fmt.Errorf("线程并发数量必须在0-1000范围内，当前值: %d", args.Threads)
@@ -471,13 +403,6 @@ func validateArgs(args *CLIArgs) error {
 	// 验证相似页面过滤容错阈值（-1表示使用默认值，不需要验证）
 	if args.FilterTolerance != -1 && (args.FilterTolerance < 0 || args.FilterTolerance > 500) {
 		return fmt.Errorf("相似页面过滤容错阈值必须在0-500范围内，当前值: %d", args.FilterTolerance)
-	}
-
-	// 端口扫描模块需要指定端口范围
-	if args.HasModule("port") && !args.Listen {
-		if len(args.Targets) == 0 && strings.TrimSpace(args.TargetFile) == "" {
-			return fmt.Errorf("端口扫描需要通过 -u 或 -l 指定目标")
-		}
 	}
 
 	// 根据模式验证参数
@@ -598,8 +523,6 @@ func validateOutputPath(outputPath string) error {
 
 	return nil
 }
-
-// validateModules 验证模块列表
 func validateModules(modules []string) error {
 	for _, module := range modules {
 		if !isValidModule(module) {
@@ -724,6 +647,7 @@ func ApplyArgsToConfig(args *CLIArgs) {
 }
 
 // applyArgsToConfig 将CLI参数应用到配置系统
+
 func applyArgsToConfig(args *CLIArgs) {
 	// 设置监听端口
 	serverConfig := config.GetServerConfig()
@@ -867,71 +791,6 @@ func createProxy() (*proxy.Proxy, error) {
 	return proxy.NewProxy(opts)
 }
 
-// runMasscanPortScan 调用 masscan 扫描（模块化实现）
-func runMasscanPortScan(args *CLIArgs) error {
-	reportPath := strings.TrimSpace(args.Output)
-	results, portsExpr, effectiveRate, err := runPortScanAndCollect(args, args.Targets, true, false)
-	if err != nil {
-		return err
-	}
-	// --json 模式：输出合并JSON（仅包含 portscan_results）到控制台；如指定 --output .json，则写入相同内容
-	if args.JSONOutput {
-		pr := aggregatePortResults(results)
-		params := map[string]interface{}{
-			"ports": portsExpr,
-			"rate":  effectiveRate,
-		}
-		jsonStr, jerr := report.GenerateCombinedJSON(nil, nil, nil, nil, pr, params)
-		if jerr != nil {
-			return jerr
-		}
-		fmt.Println(jsonStr)
-		if reportPath != "" && strings.HasSuffix(strings.ToLower(reportPath), ".json") {
-			if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
-				logger.Errorf("创建输出目录失败: %v", err)
-			} else if werr := os.WriteFile(reportPath, []byte(jsonStr), 0o644); werr != nil {
-				logger.Errorf("写入合并JSON失败: %v", werr)
-			}
-		}
-		return nil
-	}
-	for _, r := range results {
-		if r.Service != "" {
-			logger.Infof("%s:%d %s", r.IP, r.Port, formatter.FormatProtocol(strings.ToUpper(strings.TrimSpace(r.Service))))
-		} else {
-			logger.Infof("%s:%d", r.IP, r.Port)
-		}
-	}
-	logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
-
-	// 若指定输出路径，则根据扩展名导出 JSON 或 Excel
-	if reportPath != "" {
-		out := reportPath
-		lower := strings.ToLower(out)
-		if strings.HasSuffix(lower, ".json") {
-			// 落盘合并JSON（仅包含 portscan_results），与 --json 控制台一致
-			pr := aggregatePortResults(results)
-			params := map[string]interface{}{"ports": portsExpr, "rate": effectiveRate}
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				logger.Errorf("创建输出目录失败: %v", err)
-			} else {
-				if jsonStr, jerr := report.GenerateCombinedJSON(nil, nil, nil, nil, pr, params); jerr != nil {
-					logger.Errorf("生成合并JSON失败: %v", jerr)
-				} else if werr := os.WriteFile(out, []byte(jsonStr), 0o644); werr != nil {
-					logger.Errorf("端口扫描合并JSON报告写入失败: %v", werr)
-				}
-			}
-		} else if strings.HasSuffix(lower, ".xlsx") {
-			if _, err := report.GeneratePortscanExcel(results, out); err != nil {
-				logger.Errorf("端口扫描Excel报告生成失败: %v", err)
-			}
-		} else {
-			logger.Warnf("未知的输出文件类型: %s (支持 .json/.xlsx)", out)
-		}
-	}
-	return nil
-}
-
 func parseHeaderFlags(headers []string) (map[string]string, error) {
 	parsed := make(map[string]string)
 	for _, header := range headers {
@@ -957,49 +816,6 @@ func parseHeaderFlags(headers []string) (map[string]string, error) {
 		parsed[key] = value
 	}
 	return parsed, nil
-}
-
-// aggregatePortResults 将 OpenPortResult 列表按 IP 聚合为 SDKPortResult（端口字符串数组）
-func aggregatePortResults(results []portscanpkg.OpenPortResult) []report.SDKPortResult {
-	if len(results) == 0 {
-		return nil
-	}
-	m := make(map[string]map[int]string)
-	for _, r := range results {
-		if _, ok := m[r.IP]; !ok {
-			m[r.IP] = make(map[int]string)
-		}
-		if _, exists := m[r.IP][r.Port]; !exists || m[r.IP][r.Port] == "" {
-			m[r.IP][r.Port] = strings.TrimSpace(r.Service)
-		}
-	}
-	out := make([]report.SDKPortResult, 0, len(m))
-	for ip, portsSet := range m {
-		ports := make([]int, 0, len(portsSet))
-		for p := range portsSet {
-			ports = append(ports, p)
-		}
-		for i := 0; i < len(ports); i++ {
-			for j := i + 1; j < len(ports); j++ {
-				if ports[j] < ports[i] {
-					ports[i], ports[j] = ports[j], ports[i]
-				}
-			}
-		}
-		entries := make([]report.SDKPortEntry, 0, len(ports))
-		for _, p := range ports {
-			entry := report.SDKPortEntry{
-				Port:    p,
-				Service: strings.TrimSpace(portsSet[p]),
-			}
-			if entry.Service == "" {
-				entry.Service = ""
-			}
-			entries = append(entries, entry)
-		}
-		out = append(out, report.SDKPortResult{IP: ip, Ports: entries})
-	}
-	return out
 }
 
 // createFingerprintAddon 创建指纹识别插件
@@ -1062,9 +878,6 @@ func startApplication(args *CLIArgs) error {
 		return fmt.Errorf("启动代理服务器失败: %v", err)
 	}
 
-	// 启动指定的模块
-	logger.Debug("开始启动指定的模块...")
-
 	// 启动指纹识别模块
 	if args.HasModule(string(modulepkg.ModuleFinger)) && app.fingerprintAddon != nil {
 		// 注意：fingerprintAddon是直接的addon，不是模块，需要设置为全局实例
@@ -1077,7 +890,6 @@ func startApplication(args *CLIArgs) error {
 
 		// 将指纹识别addon添加到代理服务器
 		app.proxy.AddAddon(app.fingerprintAddon)
-		logger.Debug("指纹识别addon已添加到代理服务器")
 		logger.Debug("指纹识别模块启动成功")
 	}
 
@@ -1116,7 +928,6 @@ func displayStartupInfo(args *CLIArgs) {
 	// 显示模块状态
 	fmt.Print(`
 		veo@Evilc0de
-
 `)
 	logger.Debugf("模块状态:")
 	logger.Debugf("指纹识别: %s\n", getModuleStatus(args.HasModule(string(modulepkg.ModuleFinger))))
@@ -1298,6 +1109,7 @@ func cleanup() {
 }
 
 // runActiveScanMode 运行主动扫描模式
+
 func runActiveScanMode(args *CLIArgs) error {
 	logger.Debug("启动主动扫描模式")
 
@@ -1310,9 +1122,7 @@ func runActiveScanMode(args *CLIArgs) error {
 	return scanner.Run()
 }
 
-// ===========================================
 // 状态码过滤解析和验证函数
-// ===========================================
 
 // parseStatusCodes 解析CLI参数中的状态码字符串
 func parseStatusCodes(statusCodesStr string) ([]int, error) {
@@ -1452,135 +1262,4 @@ func normalizeTargetHost(raw string) (host string, port string, wildcard bool) {
 	}
 	lower := strings.ToLower(hostPart)
 	return lower, port, strings.HasPrefix(lower, "*.")
-}
-
-func resolvePortExpression(args *CLIArgs) (string, string, error) {
-	expr, source, err := portconfig.ResolveExpression(args.Ports)
-	if err != nil {
-		if errors.Is(err, portconfig.ErrEmptyExpression) {
-			return "", "", fmt.Errorf("端口扫描需要指定 -p 参数，例如: -p web / -p service / -p top1000 / -p all / -p 80,443,8000-8100")
-		}
-		return "", "", err
-	}
-	return expr, source, nil
-}
-
-func logPortScanBanner(ports string, rate int) {
-	logger.Infof("%s", formatter.FormatBold(fmt.Sprintf("Start Port Scan, Ports: %s rate: %d", ports, rate)))
-}
-
-func runPortScanAndCollect(args *CLIArgs, baseTargets []string, announce bool, printResults bool) ([]portscanpkg.OpenPortResult, string, int, error) {
-	effectiveRate := args.Rate
-	if effectiveRate <= 0 {
-		effectiveRate = gogoscanner.DefaultRate
-	}
-	portsExpr, portSource, err := resolvePortExpression(args)
-	if err != nil {
-		fallback := portscanpkg.DerivePortsFromTargets(baseTargets)
-		if strings.TrimSpace(fallback) == "" {
-			return nil, "", effectiveRate, err
-		}
-		portsExpr = fallback
-		logger.Warnf("加载端口字典失败: %v，改用目标推导端口: %s", err, portsExpr)
-	} else if portSource != "" {
-		logger.Infof("Use Port Dict: %s", portSource)
-	}
-
-	var msTargets []string
-	if strings.TrimSpace(args.TargetFile) == "" {
-		targetList := baseTargets
-		if len(targetList) == 0 {
-			targetList = args.Targets
-		}
-		var resolveErr error
-		msTargets, resolveErr = portscanpkg.ResolveTargetsToIPs(targetList)
-		if resolveErr != nil {
-			return nil, portsExpr, effectiveRate, fmt.Errorf("目标解析失败: %v", resolveErr)
-		}
-	}
-
-	if announce {
-		fmt.Println()
-		logPortScanBanner(portsExpr, effectiveRate)
-	}
-
-	var scannerOpts []gogoscanner.Option
-	if effectiveRate > 0 {
-		scannerOpts = append(scannerOpts, gogoscanner.WithRate(effectiveRate))
-	}
-	if args.Timeout > 0 {
-		scannerOpts = append(scannerOpts, gogoscanner.WithTimeout(time.Duration(args.Timeout)*time.Second))
-	}
-	if args.Threads > 0 {
-		scannerOpts = append(scannerOpts, gogoscanner.WithThreads(args.Threads))
-	}
-	// 应用端口扫描专用重试参数
-	if args.PortRetry > 0 {
-		scannerOpts = append(scannerOpts, gogoscanner.WithRetry(args.PortRetry))
-	} else if args.Retry > 0 {
-		// 如果未指定-pr，可以使用全局retry作为回退，或者保持默认
-		scannerOpts = append(scannerOpts, gogoscanner.WithRetry(args.Retry))
-	}
-
-	scanner := gogoscanner.NewScanner(scannerOpts...)
-	results, err := scanner.Scan(context.Background(), msTargets, portsExpr)
-	if err != nil {
-		return nil, portsExpr, effectiveRate, err
-	}
-
-	results = deduplicateOpenPorts(results)
-
-	// 准备服务识别选项
-	identifyOpts := portservice.Options{}
-	if args.Timeout > 0 {
-		identifyOpts.Timeout = time.Duration(args.Timeout) * time.Second
-	}
-	if args.Threads > 0 {
-		identifyOpts.Concurrency = args.Threads
-	}
-
-	if args.EnableServiceProbe {
-		results = portservice.IdentifyServices(context.Background(), results, identifyOpts)
-	}
-
-	if printResults {
-		for _, r := range results {
-			if strings.TrimSpace(r.Service) != "" {
-				logger.Infof("%s:%d %s", r.IP, r.Port, formatter.FormatProtocol(strings.ToUpper(strings.TrimSpace(r.Service))))
-			} else {
-				logger.Infof("%s:%d", r.IP, r.Port)
-			}
-		}
-		logger.Debugf("端口扫描完成，发现开放端口: %d", len(results))
-	}
-
-	return results, portsExpr, effectiveRate, nil
-}
-
-func deduplicateOpenPorts(results []portscanpkg.OpenPortResult) []portscanpkg.OpenPortResult {
-	if len(results) <= 1 {
-		return results
-	}
-	seen := make(map[string]portscanpkg.OpenPortResult, len(results))
-	for _, r := range results {
-		key := fmt.Sprintf("%s:%d", r.IP, r.Port)
-		if existing, ok := seen[key]; ok {
-			if strings.TrimSpace(existing.Service) == "" && strings.TrimSpace(r.Service) != "" {
-				seen[key] = r
-			}
-			continue
-		}
-		seen[key] = r
-	}
-	deduped := make([]portscanpkg.OpenPortResult, 0, len(seen))
-	for _, r := range seen {
-		deduped = append(deduped, r)
-	}
-	sort.Slice(deduped, func(i, j int) bool {
-		if deduped[i].IP == deduped[j].IP {
-			return deduped[i].Port < deduped[j].Port
-		}
-		return deduped[i].IP < deduped[j].IP
-	})
-	return deduped
 }

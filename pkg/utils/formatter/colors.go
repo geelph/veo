@@ -23,23 +23,31 @@ import (
 
 // ANSI颜色代码常量
 const (
-	ColorReset  = "\033[0m"  // 重置
-	ColorGreen  = "\033[32m" // 绿色
-	ColorLightRed   = "\033[91m" // 浅红色
-	ColorRed    = "\033[31m" // 红色
-	ColorYellow = "\033[33m" // 黄色
-	ColorBlue   = "\033[34m" // 蓝色
-	ColorBold   = "\033[1m"  // 加粗
-	ColorUnder  = "\033[4m"  // 下划线
+	ColorReset    = "\033[0m"  // 重置
+	ColorGreen    = "\033[32m" // 绿色
+	ColorLightRed = "\033[91m" // 浅红色
+	ColorRed      = "\033[31m" // 红色
+	ColorYellow   = "\033[33m" // 黄色
+	ColorBlue     = "\033[34m" // 蓝色
+	ColorBold     = "\033[1m"  // 加粗
+	ColorUnder    = "\033[4m"  // 下划线
 
 	// 保留的颜色常量（用于其他功能）
 	ColorMagenta = "\033[35m" // 紫色（保留用于其他功能）
 	ColorGray    = "\033[90m" // 灰色（保留用于其他功能）
 	ColorDim     = "\033[2m"  // 暗淡（用于DSL规则显示）
 
-	// URL专用颜色常量
-	ColorDarkGreen         = "\033[38;2;46;125;50m" // 深绿色 (#2e7d32) - 24位真彩色
-	ColorDarkGreenFallback = "\033[32m"             // 深绿色降级方案 - 标准绿色（16色兼容）
+	// 品牌绿色（#0eb83a）常量，统一应用于URL、状态码、指纹名称
+	ColorBrandGreen         = "\033[38;2;14;184;58m" // 品牌绿色 (#0eb83a) - 24位真彩色
+	ColorBrandGreenFallback = "\033[32m"             // 降级方案 - 标准绿色（16色兼容）
+
+	// 指纹名称专用颜色（#44cef6）
+	ColorFingerprintCyan         = "\033[38;2;68;206;246m" // 天青色 (#44cef6)
+	ColorFingerprintCyanFallback = "\033[36m"              // 降级方案 - 青色
+
+	// 指纹标题专用颜色（#3eede7）
+	ColorFingerprintTitleCyan         = "\033[38;2;62;237;231m"
+	ColorFingerprintTitleCyanFallback = "\033[36m"
 )
 
 // FormatProtocol 格式化协议显示（加粗绿色）
@@ -47,17 +55,27 @@ func FormatProtocol(proto string) string {
 	if !shouldUseColors() {
 		return fmt.Sprintf("[%s]", proto)
 	}
-	// 对方括号和内容都应用加粗绿色，保持风格一致
 	return fmt.Sprintf("%s%s[%s]%s", ColorBold, ColorGreen, proto, ColorReset)
 }
 
-// FormatURL 格式化URL显示（使用深绿色）
+// FormatURL 格式化URL显示（使用深绿色，右侧填充对齐）
 func FormatURL(url string) string {
-	if !shouldUseColors() {
-		return url // 如果禁用彩色输出，直接返回URL
+	// 截断过长的URL
+	displayURL := url
+	if len(url) > 60 {
+		displayURL = url[:57] + "..."
 	}
-	// 使用深绿色显示URL
-	return getDarkGreenColor() + url + ColorReset
+
+	padding := 0
+	if len(displayURL) < 60 {
+		padding = 60 - len(displayURL)
+	}
+
+	if !shouldUseColors() {
+		return fmt.Sprintf("%s%s", displayURL, strings.Repeat(" ", padding))
+	}
+	// 使用品牌绿色显示URL，填充在颜色代码之外
+	return getBrandGreenColor() + displayURL + ColorReset + strings.Repeat(" ", padding)
 }
 
 // FormatFingerprintName 格式化指纹名称显示（统一蓝色显示，无加粗）
@@ -66,73 +84,49 @@ func FormatFingerprintName(name string) string {
 		return name // 如果禁用彩色输出，直接返回指纹名称
 	}
 
-	// 统一使用蓝色显示所有指纹信息，不使用加粗格式
-	return ColorBlue + name + ColorReset
+	// 使用指定天青色显示指纹信息
+	return getFingerprintColor() + name + ColorReset
 }
 
 // FormatStatusCode 格式化状态码显示（根据状态码类别使用不同颜色）
 func FormatStatusCode(statusCode int) string {
+	statusStr := fmt.Sprintf("[%d]", statusCode)
+
 	if !shouldUseColors() {
-		return fmt.Sprintf("[%d]", statusCode) // 如果禁用彩色输出，直接返回状态码
+		return statusStr // 如果禁用彩色输出，直接返回状态码
 	}
 
-	// 根据状态码范围选择对应颜色（恢复：重新添加加粗格式）
-	var color string
-	switch {
-	case statusCode >= 200 && statusCode < 300:
-		// 2XX状态码（成功）：加粗绿色
-		color = ColorBold + ColorGreen
-	case statusCode >= 300 && statusCode < 400:
-		// 3XX状态码（重定向）：加粗黄色
-		color = ColorBold + ColorYellow
-	case statusCode >= 400 && statusCode < 500:
-		// 4XX状态码（客户端错误）：加粗红色
-		color = ColorBold + ColorRed
-	case statusCode >= 500 && statusCode < 600:
-		// 5XX状态码（服务器错误）：加粗紫色
-		color = ColorBold + ColorMagenta
-	default:
-		// 其他状态码：加粗默认颜色
-		color = ColorBold
-	}
-
-	return color + fmt.Sprintf("[%d]", statusCode) + ColorReset
+	// 所有状态码统一使用品牌绿色加粗显示
+	return ColorBold + getBrandGreenColor() + statusStr + ColorReset
 }
 
 // FormatTitle 格式化标题显示
 func FormatTitle(title string) string {
 	// [修复] 检查标题是否已经包含方括号，避免双重方括号问题
-	if strings.HasPrefix(title, "[") && strings.HasSuffix(title, "]") {
-		// 标题已经包含方括号，直接返回
-		if !shouldUseColors() {
-			return title
-		}
-		return title + ColorReset
+	finalTitle := title
+	if !strings.HasPrefix(title, "[") || !strings.HasSuffix(title, "]") {
+		finalTitle = fmt.Sprintf("[%s]", title)
 	}
 
-	// 标题不包含方括号，添加方括号格式化
 	if !shouldUseColors() {
-		return fmt.Sprintf("[%s]", title)
+		return finalTitle
 	}
-	return fmt.Sprintf("[%s]", title) + ColorReset
+	return finalTitle + ColorReset
 }
 
-// FormatFingerprintTitle 格式化指纹匹配后的标题显示（浅红色，不加粗）
+// FormatFingerprintTitle 格式化指纹匹配后的标题显示（青色，不加粗）
 func FormatFingerprintTitle(title string) string {
 	// 检查标题是否已经包含方括号
-	if strings.HasPrefix(title, "[") && strings.HasSuffix(title, "]") {
-		if !shouldUseColors() {
-			return title
-		}
-		// 使用浅红色显示
-		return ColorLightRed + title + ColorReset
+	finalTitle := title
+	if !strings.HasPrefix(title, "[") || !strings.HasSuffix(title, "]") {
+		finalTitle = fmt.Sprintf("[%s]", title)
 	}
 
 	if !shouldUseColors() {
-		return fmt.Sprintf("[%s]", title)
+		return finalTitle
 	}
-	// 添加方括号并使用浅红色显示
-	return ColorLightRed + fmt.Sprintf("[%s]", title) + ColorReset
+	// 使用统一青色显示匹配标题
+	return getFingerprintTitleColor() + finalTitle + ColorReset
 }
 
 // FormatNumber 格式化数字显示（移除颜色，使用默认颜色）
@@ -156,11 +150,13 @@ func FormatResultNumber(number int) string {
 
 // FormatContentLength 格式化内容长度显示
 func FormatContentLength(length int) string {
+	lenStr := fmt.Sprintf("[%d]", length)
+
 	if !shouldUseColors() {
-		return fmt.Sprintf("[%d]", length) // 如果禁用彩色输出，直接返回内容长度
+		return lenStr // 如果禁用彩色输出，直接返回内容长度
 	}
 	// 修改：内容长度使用加粗默认颜色显示
-	return fmt.Sprintf("[%d]", length) + ColorReset
+	return fmt.Sprintf("%s%s", lenStr, ColorReset)
 }
 
 // FormatContentType 格式化内容类型显示（简化格式，只保留主要类型）
@@ -168,10 +164,12 @@ func FormatContentType(contentType string) string {
 	// 简化Content-Type：只保留分号前的主要类型
 	simplifiedType := simplifyContentType(contentType)
 
+	displayType := fmt.Sprintf("[%s]", simplifiedType)
+
 	if !shouldUseColors() {
-		return fmt.Sprintf("[%s]", simplifiedType) // 如果禁用彩色输出，直接返回简化的内容类型
+		return displayType // 如果禁用彩色输出，直接返回简化的内容类型
 	}
-	return fmt.Sprintf("[%s]", simplifiedType) + ColorReset
+	return displayType + ColorReset
 }
 
 // simplifyContentType 简化Content-Type，只保留分号前的主要类型
@@ -334,25 +332,53 @@ func ColorsEnabled() bool {
 	return atomic.LoadInt32(&globalColorEnabled) == 1
 }
 
-// getDarkGreenColor 获取深绿色颜色代码（支持降级）
-// 返回适合当前终端环境的深绿色ANSI代码
-func getDarkGreenColor() string {
+// getBrandGreenColor 获取品牌绿色颜色代码（支持降级）
+// 返回适合当前终端环境的品牌绿色ANSI代码
+func getBrandGreenColor() string {
 	if !shouldUseColors() {
 		return "" // 如果禁用彩色输出，返回空字符串
 	}
 
 	// 临时修复：强制使用16色降级方案，绕过24位真彩色问题
 	// TODO: 调试完成后恢复24位真彩色检测逻辑
-	return ColorDarkGreenFallback
+	return ColorBrandGreenFallback
 
 	// 原始逻辑（临时注释）：
 	// // 检查是否支持24位真彩色
 	// if supportsTrueColor() {
-	// 	return ColorDarkGreen // 使用24位真彩色
+	// 	return ColorBrandGreen // 使用24位真彩色
 	// }
 	//
 	// // 降级到16色方案
-	// return ColorDarkGreenFallback
+	// return ColorBrandGreenFallback
+}
+
+// getFingerprintColor 获取指纹名称专用颜色代码（支持降级）
+func getFingerprintColor() string {
+	if !shouldUseColors() {
+		return ""
+	}
+	return ColorFingerprintCyanFallback
+
+	// 原始逻辑预留：
+	// if supportsTrueColor() {
+	// 	return ColorFingerprintCyan
+	// }
+	// return ColorFingerprintCyanFallback
+}
+
+// getFingerprintTitleColor 获取指纹匹配标题颜色（支持降级）
+func getFingerprintTitleColor() string {
+	if !shouldUseColors() {
+		return ""
+	}
+	return ColorFingerprintTitleCyanFallback
+
+	// 原始逻辑预留：
+	// if supportsTrueColor() {
+	// 	return ColorFingerprintTitleCyan
+	// }
+	// return ColorFingerprintTitleCyanFallback
 }
 
 // ============================================================================

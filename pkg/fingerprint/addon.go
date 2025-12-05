@@ -11,9 +11,7 @@ import (
 	"veo/proxy"
 )
 
-// ===========================================
 // Addon实现
-// ===========================================
 
 // FingerprintAddon 指纹识别插件（优化版）
 type FingerprintAddon struct {
@@ -280,9 +278,7 @@ func (fa *FingerprintAddon) shouldSkipResponse(f *proxy.Flow) bool {
 	return false
 }
 
-// ===========================================
 // 公共方法
-// ===========================================
 
 // SetHTTPClient 设置HTTP客户端（用于主动探测）
 func (fa *FingerprintAddon) SetHTTPClient(client interface{}) {
@@ -336,9 +332,7 @@ func (fa *FingerprintAddon) ReloadRules() error {
 	return fa.engine.LoadRules(fa.engine.config.RulesPath)
 }
 
-// ===========================================
 // 辅助方法
-// ===========================================
 
 // extractHostFromURL 从URL中提取主机名（包含端口）
 func (fa *FingerprintAddon) extractHostFromURL(rawURL string) string {
@@ -386,9 +380,7 @@ func (fa *FingerprintAddon) extractTitleFromHTML(body string) string {
 	return extractor.ExtractTitle(body)
 }
 
-// ===========================================
 // 全局实例管理
-// ===========================================
 
 var (
 	globalFingerprintAddon *FingerprintAddon
@@ -422,9 +414,7 @@ func (fa *FingerprintAddon) extractAndDecompressBody(f *proxy.Flow) string {
 	return fa.encodingDetector.DetectAndConvert(string(decompressed), f.Response.Header.Get("Content-Type"))
 }
 
-// ===========================================
 // 防缓存相关方法
-// ===========================================
 
 // addNoCacheHeaders 添加防缓存请求头部
 func (fa *FingerprintAddon) addNoCacheHeaders(f *proxy.Flow) {

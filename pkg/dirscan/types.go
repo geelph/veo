@@ -7,9 +7,7 @@ import (
 	requests "veo/pkg/utils/processor"
 )
 
-// ===========================================
 // 核心类型定义
-// ===========================================
 
 // ScanResult 扫描结果
 type ScanResult struct {
@@ -67,9 +65,7 @@ const (
 	StatusError                      // 错误状态
 )
 
-// ===========================================
 // 默认配置
-// ===========================================
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *EngineConfig {

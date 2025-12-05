@@ -327,5 +327,11 @@ func DetectClientRedirectURL(body string) string {
 		}
 	}
 
+	// Fallback: 某些服务器直接返回文本提示 "Moved to: <a href="...">"，需要解析其中的链接
+	movedToRe := regexp.MustCompile(`(?is)moved\s+to:?\s*<a\s+href=['"]([^'"]+)['"]`)
+	if m := movedToRe.FindStringSubmatch(body); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+
 	return ""
 }

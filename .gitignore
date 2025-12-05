@@ -19,7 +19,6 @@ test
 veo_darwin_arm64
 test.go
 /plans
-internal/modules/portscan/masscan/assets/README.txt
 paused.conf
 /node_modules
 package-lock.json

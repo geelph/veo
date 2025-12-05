@@ -13,9 +13,7 @@ var (
 	snippetNewlineRegex = regexp.MustCompile(`\n+`)
 )
 
-// ===========================================
 // DSL解析器实现
-// ===========================================
 
 // NewDSLParser 创建DSL解析器
 func NewDSLParser() *DSLParser {
@@ -347,9 +345,7 @@ func (p *DSLParser) evaluateContainsAll(dsl string, ctx *DSLContext) (bool, bool
 	return false, false
 }
 
-// ===========================================
 // 辅助方法
-// ===========================================
 
 // parseParameters 解析函数参数
 func (p *DSLParser) parseParameters(content string) []string {

@@ -8,76 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"veo/pkg/types"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
-	"veo/pkg/types"
 )
-
-// PortscanJSONSummary 简要统计
-type PortscanJSONSummary struct {
-	Count      int    `json:"count"`
-	Generated  string `json:"generated"`
-	TargetHint string `json:"target_hint,omitempty"`
-}
-
-// PortscanJSONFile 输出结构
-type PortscanJSONFile struct {
-	Summary PortscanJSONSummary    `json:"summary"`
-	Results []types.OpenPortResult `json:"results"`
-}
-
-// GeneratePortscanJSON 生成端口扫描JSON报告（默认路径）
-// 参数：
-//   - results: 端口扫描结果
-//   - target: 目标标识（用于文件名提示）
-//
-// 返回：输出文件路径
-func GeneratePortscanJSON(results []types.OpenPortResult, target string) (string, error) {
-	ts := time.Now().Format("20060102_150405")
-	if target == "" {
-		target = "portscan"
-	}
-	fileName := fmt.Sprintf("portscan_%s_%s.json", sanitizeFilename(target), ts)
-	outDir := "./reports"
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return "", fmt.Errorf("创建输出目录失败: %w", err)
-	}
-	path := filepath.Join(outDir, fileName)
-	return GenerateCustomPortscanJSON(results, target, path)
-}
-
-// GenerateCustomPortscanJSON 生成端口扫描JSON报告（自定义路径）
-func GenerateCustomPortscanJSON(results []types.OpenPortResult, target, outputPath string) (string, error) {
-	data := PortscanJSONFile{
-		Summary: PortscanJSONSummary{
-			Count:      len(results),
-			Generated:  time.Now().Format(time.RFC3339),
-			TargetHint: target,
-		},
-		Results: results,
-	}
-
-	// 序列化
-	b, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("JSON序列化失败: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return "", fmt.Errorf("创建输出目录失败: %w", err)
-	}
-	if err := os.WriteFile(outputPath, b, 0o644); err != nil {
-		return "", fmt.Errorf("写入JSON失败: %w", err)
-	}
-	logger.Debugf("JSON报告已生成: %s", outputPath)
-	return outputPath, nil
-}
 
 // CombinedAPIResponse 统一的API/CLI JSON响应结构
 type CombinedAPIResponse struct {
 	Code        int             `json:"code"`
 	Message     string          `json:"message,omitempty"`
-	PortCount   int             `json:"port_count"`
 	FingerCount int             `json:"finger_count"`
 	DirCount    int             `json:"dirscan_count"`
 	TimeUsedMs  int64           `json:"time_used"`
@@ -85,15 +24,8 @@ type CombinedAPIResponse struct {
 }
 
 type CombinedAPIData struct {
-	Portscan    []PortEntry          `json:"portscan,omitempty"`
 	Fingerprint []FingerprintAPIPage `json:"fingerprint,omitempty"`
 	Dirscan     []DirscanAPIPage     `json:"dirscan,omitempty"`
-}
-
-type PortEntry struct {
-	IP      string `json:"ip"`
-	Port    int    `json:"port"`
-	Service string `json:"service,omitempty"`
 }
 
 type FingerprintAPIPage struct {
@@ -113,17 +45,6 @@ type DirscanAPIPage struct {
 	ContentType   string                      `json:"content_type,omitempty"`
 	DurationMs    int64                       `json:"duration_ms"`
 	Fingerprints  []SDKFingerprintMatchOutput `json:"fingerprints,omitempty"`
-}
-
-// SDKPortResult 端口扫描结果（供内部复用）
-type SDKPortResult struct {
-	IP    string         `json:"ip"`
-	Ports []SDKPortEntry `json:"ports"`
-}
-
-type SDKPortEntry struct {
-	Port    int    `json:"port"`
-	Service string `json:"service,omitempty"`
 }
 
 type SDKFingerprintMatchOutput struct {
@@ -156,7 +77,7 @@ func NewCustomJSONReportGenerator(outputPath string) *JSONReportGenerator {
 // GenerateDirscanReport 生成目录扫描JSON报告
 func (jrg *JSONReportGenerator) GenerateDirscanReport(filterResult *interfaces.FilterResult, target string, scanParams map[string]interface{}) (string, error) {
 	dirPages := extractResponses(filterResult)
-	resp := jrg.buildCombinedAPIResponse(dirPages, nil, nil, nil, nil, scanParams)
+	resp := jrg.buildCombinedAPIResponse(dirPages, nil, nil, nil, scanParams)
 	return jrg.saveCombinedResponse(resp, target, "dirscan")
 }
 
@@ -172,7 +93,7 @@ type FingerprintStats struct {
 
 // GenerateFingerprintReport 生成指纹识别JSON报告
 func (jrg *JSONReportGenerator) GenerateFingerprintReport(responses []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, target string, scanParams map[string]interface{}) (string, error) {
-	resp := jrg.buildCombinedAPIResponse(nil, responses, matches, stats, nil, scanParams)
+	resp := jrg.buildCombinedAPIResponse(nil, responses, matches, stats, scanParams)
 	return jrg.saveCombinedResponse(resp, target, "fingerprint")
 }
 
@@ -200,9 +121,9 @@ func GenerateCustomJSONFingerprintReport(responses []interfaces.HTTPResponse, ma
 	return generator.GenerateFingerprintReport(responses, matches, stats, target, scanParams)
 }
 
-func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, portResults []SDKPortResult, scanParams map[string]interface{}) (string, error) {
+func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, scanParams map[string]interface{}) (string, error) {
 	generator := NewJSONReportGenerator()
-	result := generator.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
+	result := generator.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, scanParams)
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("JSON序列化失败: %v", err)
@@ -211,9 +132,9 @@ func GenerateCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages [
 }
 
 // GenerateCustomCombinedJSON 生成合并JSON报告（写入指定文件）
-func GenerateCustomCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, portResults []SDKPortResult, target string, scanParams map[string]interface{}, outputPath string) (string, error) {
+func GenerateCustomCombinedJSON(dirPages []interfaces.HTTPResponse, fingerprintPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, target string, scanParams map[string]interface{}, outputPath string) (string, error) {
 	jrg := NewCustomJSONReportGenerator(outputPath)
-	result := jrg.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, portResults, scanParams)
+	result := jrg.buildCombinedAPIResponse(dirPages, fingerprintPages, matches, stats, scanParams)
 	return jrg.saveCombinedResponse(result, target, "combined")
 }
 
@@ -234,33 +155,19 @@ func extractResponses(filterResult *interfaces.FilterResult) []interfaces.HTTPRe
 }
 
 // buildCombinedAPIResponse 构建统一的API/CLI JSON响应结构
-func (jrg *JSONReportGenerator) buildCombinedAPIResponse(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, portResults []SDKPortResult, scanParams map[string]interface{}) CombinedAPIResponse {
+func (jrg *JSONReportGenerator) buildCombinedAPIResponse(dirPages []interfaces.HTTPResponse, fpPages []interfaces.HTTPResponse, matches []types.FingerprintMatch, stats *FingerprintStats, scanParams map[string]interface{}) CombinedAPIResponse {
 	dirPagesAPI := makeDirscanPageResults(dirPages)
 	fpPagesAPI := makeFingerprintPageResults(fpPages, matches)
-
-	// 展开端口结果为扁平结构
-	var portEntries []PortEntry
-	for _, pr := range portResults {
-		for _, p := range pr.Ports {
-			portEntries = append(portEntries, PortEntry{
-				IP:      pr.IP,
-				Port:    p.Port,
-				Service: strings.TrimSpace(p.Service),
-			})
-		}
-	}
 
 	duration := time.Since(jrg.startTime).Milliseconds()
 
 	resp := CombinedAPIResponse{
 		Code:        0,
 		Message:     "ok",
-		PortCount:   len(portEntries),
 		FingerCount: len(fpPagesAPI),
 		DirCount:    len(dirPagesAPI),
 		TimeUsedMs:  duration,
 		Data: CombinedAPIData{
-			Portscan:    portEntries,
 			Fingerprint: fpPagesAPI,
 			Dirscan:     dirPagesAPI,
 		},

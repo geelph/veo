@@ -12,9 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ===========================================
 // 核心类型定义
-// ===========================================
 
 // HTTPClientInterface 已移动到 internal/utils/httpclient 包
 // 这里保留注释供参考，实际定义在 httpclient_adapter.go 中作为类型别名
@@ -186,9 +184,7 @@ type DSLContext struct {
 type DSLParser struct {
 }
 
-// ===========================================
 // 静态文件过滤相关
-// ===========================================
 
 var (
 	// StaticFileExtensions 静态文件扩展名

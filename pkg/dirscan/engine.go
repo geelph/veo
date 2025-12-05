@@ -14,9 +14,7 @@ import (
 	sharedutils "veo/pkg/utils/shared"
 )
 
-// ===========================================
 // 引擎实现
-// ===========================================
 
 // NewEngine 创建新的目录扫描引擎
 func NewEngine(config *EngineConfig) *Engine {
@@ -166,12 +164,11 @@ func (e *Engine) PerformScan(collectorInstance interfaces.URLCollectorInterface)
 func (e *Engine) generateScanURLs(collectorInstance interfaces.URLCollectorInterface) ([]string, error) {
 	logger.Debug("开始生成扫描URL")
 
-	// 创建内容管理器（使用utils包中的实现）
-	contentManager := NewContentManager()
-	contentManager.SetCollector(collectorInstance)
+	// 创建URL生成器
+	generator := NewURLGenerator()
 
 	// 生成扫描URL
-	scanURLs := contentManager.GenerateScanURLs()
+	scanURLs := generator.GenerateURLsFromCollector(collectorInstance)
 
 	logger.Debugf("生成扫描URL完成，共%d个", len(scanURLs))
 	return scanURLs, nil

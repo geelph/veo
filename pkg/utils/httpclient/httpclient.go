@@ -14,9 +14,7 @@ import (
 	"veo/pkg/utils/useragent"
 )
 
-// ===========================================
 // 接口定义
-// ===========================================
 
 // HTTPClientInterface HTTP客户端接口（通用HTTP客户端抽象）
 type HTTPClientInterface interface {
@@ -31,9 +29,7 @@ type HeaderAwareClient interface {
 	MakeRequestWithHeaders(rawURL string, headers map[string]string) (body string, statusCode int, err error)
 }
 
-// ===========================================
 // 配置结构
-// ===========================================
 
 // Config HTTP客户端配置结构
 type Config struct {
@@ -72,9 +68,7 @@ func DefaultConfigWithUserAgent(userAgent string) *Config {
 	return config
 }
 
-// ===========================================
 // 通用HTTP客户端实现（支持TLS配置和重定向）
-// ===========================================
 
 // Client 通用HTTP客户端实现
 // 支持配置化的重定向跟随和TLS配置功能
@@ -100,12 +94,13 @@ func New(config *Config) *Client {
 	}
 
 	transport := &http.Transport{
-			MaxIdleConns:        20,
-			IdleConnTimeout:     30 * time.Second,
-			DisableCompression:  false,
-			MaxIdleConnsPerHost: 5,
-			TLSClientConfig:     tlsConfig,
-			TLSHandshakeTimeout: config.TLSTimeout,
+		MaxIdleConns:        1000,             // 性能优化：增加最大空闲连接数
+		IdleConnTimeout:     90 * time.Second, // 性能优化：延长空闲连接超时时间
+		DisableCompression:  false,
+		MaxIdleConnsPerHost: 200, // 性能优化：增加每个Host的最大空闲连接数
+		TLSClientConfig:     tlsConfig,
+		TLSHandshakeTimeout: config.TLSTimeout,
+		ForceAttemptHTTP2:   true, // 性能优化：强制尝试HTTP/2
 	}
 
 	// 配置代理
@@ -125,8 +120,8 @@ func New(config *Config) *Client {
 
 	// 配置重定向策略
 	// 统一禁用net/http的自动重定向，交由redirect.Execute统一管理
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 
 	return &Client{
@@ -173,13 +168,13 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 		MaxRedirects:   c.maxRedirects,
 		FollowRedirect: c.followRedirect,
 		SameHostOnly:   false, // 指纹识别默认不限制跨域跳转
-		}
+	}
 
 	// 构造Fetcher适配器
 	fetcher := &httpClientFetcher{
 		client:        c,
 		customHeaders: customHeaders,
-		}
+	}
 
 	// 执行请求（包含重定向处理）
 	resp, err := redirect.Execute(rawURL, fetcher, redirectConfig)
@@ -239,9 +234,7 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 	return string(respBody), resp.StatusCode, headers, nil
 }
 
-// ===========================================
 // 辅助方法
-// ===========================================
 
 // setRequestHeaders 设置标准请求头（包括全局自定义头部）
 func (c *Client) setRequestHeaders(req *http.Request) {
@@ -302,6 +295,10 @@ func (c *Client) handleRequestError(err error) error {
 	errStr := err.Error()
 	if strings.Contains(errStr, "tls:") || strings.Contains(errStr, "x509:") {
 		return fmt.Errorf("TLS连接失败 (可能需要跳过证书验证): %v", err)
+	}
+	if strings.Contains(errStr, "Unsolicited response received on idle HTTP channel") {
+		logger.Debugf("忽略远端推送的空闲连接响应: %v", err)
+		return nil
 	}
 	return fmt.Errorf("请求失败: %v", err)
 }

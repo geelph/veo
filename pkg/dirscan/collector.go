@@ -11,9 +11,7 @@ import (
 	"veo/proxy"
 )
 
-// ===========================================
 // 类型定义
-// ===========================================
 
 // Collector URL采集器，用于采集和过滤经过代理的URL
 type Collector struct {
@@ -26,9 +24,7 @@ type Collector struct {
 	collectionPaused   bool            // 收集是否暂停（等待用户输入）
 }
 
-// ===========================================
 // 构造函数
-// ===========================================
 
 // NewCollector 创建新的Collector实例
 func NewCollector() *Collector {
@@ -53,9 +49,7 @@ func NewCollector() *Collector {
 	return collector
 }
 
-// ===========================================
 // addon接口实现
-// ===========================================
 
 // Requestheaders 处理请求头，进行URL采集和过滤
 func (c *Collector) Requestheaders(f *proxy.Flow) {
@@ -180,9 +174,7 @@ func (c *Collector) Responseheaders(f *proxy.Flow) {
 	}
 }
 
-// ===========================================
 // 公共接口方法
-// ===========================================
 
 // GetURLCount 获取当前采集的URL数量
 func (c *Collector) GetURLCount() int {
@@ -229,18 +221,14 @@ func (c *Collector) CleanURLParams(rawURL string) string {
 	return c.cleanURLParams(rawURL)
 }
 
-// ===========================================
 // 私有辅助方法 - 主机过滤
-// ===========================================
 
 // isHostAllowed 检查主机是否被允许
 func (c *Collector) isHostAllowed(host string) bool {
 	return config.IsHostAllowed(host)
 }
 
-// ===========================================
 // 私有辅助方法 - 静态资源过滤
-// ===========================================
 
 // isStaticResource 检查URL是否为静态资源
 func (c *Collector) isStaticResource(url string) bool {
@@ -279,9 +267,7 @@ func (c *Collector) hasStaticExtension(lowerURL string, extensions []string) boo
 	return checker.IsStaticFile(lowerURL)
 }
 
-// ===========================================
 // 私有辅助方法 - URL格式验证
-// ===========================================
 
 // isValidURLFormat 验证URL格式是否合法，并尝试修复协议相对URL
 // 返回值：(是否有效, 修复后的URL)
@@ -394,9 +380,7 @@ func (c *Collector) isSupportedScheme(scheme string) bool {
 	return false
 }
 
-// ===========================================
 // 私有辅助方法 - URL参数清理
-// ===========================================
 
 // cleanPathID 清理URL路径中的末尾ID（纯数字）
 // 如果进行了修改，返回true
@@ -538,9 +522,7 @@ func (c *Collector) isAuthParam(lowerKey string) bool {
 	return authParams[lowerKey]
 }
 
-// ===========================================
 // 私有辅助方法 - 参数配置
-// ===========================================
 
 // getInvalidParams 获取无效参数列表
 func (c *Collector) getInvalidParams() map[string]bool {
@@ -612,9 +594,7 @@ func (c *Collector) getAuthParams() map[string]bool {
 	}
 }
 
-// ===========================================
 // 私有辅助方法 - 状态码处理
-// ===========================================
 
 // isValidStatusCode 检查状态码是否有效
 func (c *Collector) isValidStatusCode(code int) bool {
@@ -626,9 +606,7 @@ func (c *Collector) isValidStatusCode(code int) bool {
 	return false
 }
 
-// ===========================================
 // 私有辅助方法 - URL收集管理
-// ===========================================
 
 // addToPendingList 添加到待处理列表
 func (c *Collector) addToPendingList(cleanedURL, originalURL string) {
@@ -679,7 +657,6 @@ func (c *Collector) addToFinalCollection(url string, statusCode int) {
 	}
 }
 
-// ===========================================
 // 收集控制方法
 
 // EnableCollection 启用URL收集功能
@@ -705,9 +682,7 @@ func (c *Collector) IsCollectionEnabled() bool {
 	return c.collectionEnabled
 }
 
-// ===========================================
 // 收集状态控制方法
-// ===========================================
 
 // PauseCollection 暂停URL收集
 // 在扫描完成后调用，等待用户手动触发下一轮采集

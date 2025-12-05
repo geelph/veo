@@ -190,9 +190,7 @@ func (cc *ConnectivityChecker) ValidateAndNormalize(targets []string) ([]string,
 	return validTargets, nil
 }
 
-// ===========================================
 // 工作池实现
-// ===========================================
 
 // ConnectivityWorkerPool 连通性检测工作池（连通性并发优化）
 type ConnectivityWorkerPool struct {
@@ -475,9 +473,7 @@ func (cc *ConnectivityChecker) dynamicConcurrency(targetCount int) int {
 	return limit
 }
 
-// ===========================================
 // 进度显示
-// ===========================================
 
 // 日志修复：连通性检测进度显示同步锁
 var connectivityProgressMutex sync.Mutex

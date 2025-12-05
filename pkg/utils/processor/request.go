@@ -30,9 +30,7 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// ===========================================
 // 类型定义
-// ===========================================
 
 // 注意：HTTPResponse结构体已迁移到addon/interfaces/interfaces.go文件中
 // 使用 interfaces.HTTPResponse 来引用统一的结构体定义
@@ -121,14 +119,13 @@ type RequestProcessor struct {
 	batchMode      bool                   // 批量扫描模式标志
 
 	// 新增：HTTP认证头部管理
-	customHeaders  map[string]string  // CLI指定的自定义头部
-	authDetector   *auth.AuthDetector // 认证检测器
-	redirectClient httpclient.HTTPClientInterface
+	customHeaders        map[string]string  // CLI指定的自定义头部
+	authDetector         *auth.AuthDetector // 认证检测器
+	redirectClient       httpclient.HTTPClientInterface
+	redirectSameHostOnly bool // 是否限制重定向在同主机
 }
 
-// ===========================================
 // 构造函数
-// ===========================================
 
 // NewRequestProcessor 创建新的请求处理器
 func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
@@ -143,17 +140,30 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		titleExtractor: shared.NewTitleExtractor(),
 
 		// 新增：初始化认证头部管理
-		customHeaders:  make(map[string]string),
-		authDetector:   auth.NewAuthDetector(),
-		redirectClient: httpclient.New(nil),
+		customHeaders:        make(map[string]string),
+		authDetector:         auth.NewAuthDetector(),
+		redirectClient:       httpclient.New(nil),
+		redirectSameHostOnly: true,
 	}
 
 	return processor
 }
 
-// ===========================================
+// SetRedirectSameHostOnly 控制重定向是否限制同主机
+func (rp *RequestProcessor) SetRedirectSameHostOnly(enabled bool) {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	rp.redirectSameHostOnly = enabled
+}
+
+// IsRedirectSameHostOnly 返回当前同主机限制配置
+func (rp *RequestProcessor) IsRedirectSameHostOnly() bool {
+	rp.mu.RLock()
+	defer rp.mu.RUnlock()
+	return rp.redirectSameHostOnly
+}
+
 // HTTP认证头部管理方法
-// ===========================================
 
 // SetCustomHeaders 设置自定义HTTP头部（来自CLI参数）
 func (rp *RequestProcessor) SetCustomHeaders(headers map[string]string) {
@@ -182,9 +192,7 @@ func (rp *RequestProcessor) HasCustomHeaders() bool {
 	return len(rp.customHeaders) > 0
 }
 
-// ===========================================
 // 请求处理器核心方法
-// ===========================================
 
 // ProcessURLs 处理URL列表，发起HTTP请求并返回响应结构体列表（Worker Pool优化版本）
 func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPResponse {
@@ -222,9 +230,7 @@ func (rp *RequestProcessor) ProcessURLs(urls []string) []*interfaces.HTTPRespons
 	return responses
 }
 
-// ===========================================
 // URL处理相关方法
-// ===========================================
 
 // processConcurrentURLs 并发处理URL列表（真正的并发控制）
 func (rp *RequestProcessor) processConcurrentURLs(urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats) {
@@ -279,7 +285,7 @@ func (rp *RequestProcessor) submitTasksAsync(workerPool *WorkerPool, urls []stri
 		for i, url := range urls {
 			// 检查Worker Pool是否已停止
 			if rp.shouldStopTaskSubmission(workerPool) {
-				logger.Debugf("🚫 Worker Pool已停止，停止提交新任务")
+				logger.Debugf("Worker Pool已停止，停止提交新任务")
 				return
 			}
 
@@ -416,6 +422,7 @@ func (f *requestFetcher) MakeRequestFull(rawURL string) (string, int, map[string
 func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 	var response *interfaces.HTTPResponse
 	var err error
+	sameHostOnly := rp.IsRedirectSameHostOnly()
 
 	// 改进的重试逻辑（指数退避 + 抖动）
 	for attempt := 0; attempt <= rp.config.MaxRetries; attempt++ {
@@ -427,7 +434,7 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 		redirectConfig := &redirect.Config{
 			MaxRedirects:   rp.config.MaxRedirects,
 			FollowRedirect: rp.config.FollowRedirect,
-			SameHostOnly:   true, // 保持同主机限制策略
+			SameHostOnly:   sameHostOnly,
 		}
 
 		// 执行请求（包含重定向处理）
@@ -462,9 +469,7 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 	return nil
 }
 
-// ===========================================
 // HTTP请求相关方法
-// ===========================================
 
 // makeRequest 使用fasthttp发起请求
 func (rp *RequestProcessor) makeRequest(rawURL string) (*interfaces.HTTPResponse, error) {
@@ -499,7 +504,7 @@ func (rp *RequestProcessor) prepareRequest(req *fasthttp.Request, rawURL string)
 // logRequestError 记录请求错误日志
 func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
 	if rp.isTimeoutOrCanceledError(err) {
-		logger.Debugf("[超时丢弃] URL: %s, 耗时: >%v, 错误: %v", rawURL, rp.config.Timeout, err)
+		logger.Debugf("超时丢弃URL: %s, 耗时: >%v, 错误: %v", rawURL, rp.config.Timeout, err)
 	} else if rp.isRedirectError(err) {
 		logger.Warnf("重定向处理失败: %s, 错误: %v", rawURL, err)
 	} else {
@@ -513,9 +518,7 @@ func (rp *RequestProcessor) buildHTTPResponse(rawURL string, req *fasthttp.Reque
 	return rp.processResponse(rawURL, resp, requestHeaders, startTime)
 }
 
-// ===========================================
 // Worker Pool 实现（并发优化）
-// ===========================================
 
 // calculateOptimalBufferSize 计算最优缓冲区大小
 // 根据工作线程数量和缓冲区类型，动态计算最适合的缓冲区大小
@@ -969,9 +972,7 @@ func (rp *RequestProcessor) setRequestHeaders(h *fasthttp.RequestHeader) {
 	}
 }
 
-// ===========================================
 // 配置数据获取方法
-// ===========================================
 
 // getDefaultHeaders 获取默认请求头（集成认证头部）
 func (rp *RequestProcessor) getDefaultHeaders() map[string]string {
@@ -1063,9 +1064,7 @@ func (rp *RequestProcessor) convertToHTTPResponse(resp *fasthttp.Response) *http
 	return httpResp
 }
 
-// ===========================================
 // 配置和客户端创建方法
-// ===========================================
 
 // createFastHTTPClient 创建fasthttp客户端
 func createFastHTTPClient(config *RequestConfig) *fasthttp.Client {
@@ -1146,9 +1145,7 @@ func createFastHTTPClient(config *RequestConfig) *fasthttp.Client {
 	return client
 }
 
-// ===========================================
 // 公共接口方法
-// ===========================================
 
 // GetConfig 获取当前配置
 func (rp *RequestProcessor) GetConfig() *RequestConfig {

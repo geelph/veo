@@ -11,9 +11,7 @@ import (
 	"golang.org/x/text/transform"
 )
 
-// ===========================================
 // 字符编码处理工具
-// ===========================================
 
 // EncodingDetector 字符编码检测器
 type EncodingDetector struct{}

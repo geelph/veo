@@ -32,9 +32,7 @@ type headerAwareHTTPClient interface {
 	MakeRequestWithHeaders(string, map[string]string) (string, int, error)
 }
 
-// ===========================================
 // 引擎实现
-// ===========================================
 
 // NewEngine 创建新的指纹识别引擎
 func NewEngine(config *EngineConfig) *Engine {
@@ -642,9 +640,7 @@ func (e *Engine) GetRulesCount() int {
 	return len(e.rules)
 }
 
-// ===========================================
 // 配置和辅助方法
-// ===========================================
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *EngineConfig {
@@ -659,9 +655,7 @@ func getDefaultConfig() *EngineConfig {
 	}
 }
 
-// ===========================================
 // 缓存和去重相关方法
-// ===========================================
 
 // generateFingerprintCacheKey 生成细粒度缓存键（域名+端口+路径+指纹组合）
 // 优化版本：减少内存分配，使用strings.Builder提高性能
@@ -747,9 +741,7 @@ func highlightedSnippetLines(snippet, matcher string) []string {
 	return lines
 }
 
-// ===========================================
 // 图标缓存相关方法
-// ===========================================
 
 // getIconHash 获取图标哈希值（带缓存，包括失败结果缓存）
 func (e *Engine) getIconHash(iconURL string, httpClient interface{}) (string, error) {
@@ -824,27 +816,18 @@ func (e *Engine) outputNoMatchInfo(response *HTTPResponse) {
 		return
 	}
 
-	// 生成细粒度缓存键（无指纹）
 	cacheKey := e.generateFingerprintCacheKey(response.URL, nil)
-
-	// 使用优化的检查-标记方法
 	if e.checkAndMarkFingerprint(cacheKey) {
-		var logMsg strings.Builder
-		logMsg.WriteString(formatter.FormatURL(response.URL))
-		logMsg.WriteString(" ")
-
-		title := response.Title
-		if title == "" {
-			title = "无标题"
-		}
-		logMsg.WriteString(formatter.FormatTitle(title))
-
-		logMsg.WriteString(" ")
-		logMsg.WriteString(formatter.FormatStatusCode(response.StatusCode))
-		logMsg.WriteString(" ")
-		logMsg.WriteString(formatter.FormatContentType(response.ContentType))
-
-		logger.Info(logMsg.String())
+		line := formatter.FormatLogLine(
+			response.URL,
+			response.StatusCode,
+			response.Title,
+			response.ContentLength,
+			response.ContentType,
+			nil,
+			false,
+		)
+		logger.Info(line)
 	}
 }
 
@@ -869,20 +852,7 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 
 	// 使用优化的检查-标记方法
 	if e.checkAndMarkFingerprint(cacheKey) {
-		// 构建高亮日志消息（新增：添加标题显示，与目录扫描格式保持一致）
-		var logMsg strings.Builder
-		logMsg.WriteString(formatter.FormatURL(response.URL))
-		logMsg.WriteString(" ")
-
-		// 添加标题显示（与目录扫描格式保持一致）
-		title := response.Title
-		if title == "" {
-			title = "无标题"
-		}
-		logMsg.WriteString(formatter.FormatFingerprintTitle(title))
-		logMsg.WriteString(" ")
-		logMsg.WriteString(formatter.FormatContentType(response.ContentType))
-
+		var fingerprintDisplays []string
 		for _, match := range matches {
 			if match == nil {
 				continue
@@ -891,16 +861,21 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 			if display == "" {
 				continue
 			}
-			logMsg.WriteString(" ")
-			logMsg.WriteString(display)
+			fingerprintDisplays = append(fingerprintDisplays, display)
+		}
+		if tag != "" {
+			// fingerprintDisplays = append(fingerprintDisplays, formatter.FormatFingerprintTag(tag))
 		}
 
-		// 添加标签（如果提供）
-		if tag != "" {
-			logMsg.WriteString(" [")
-			logMsg.WriteString(formatter.FormatFingerprintTag(tag))
-			logMsg.WriteString("]")
-		}
+		line := formatter.FormatLogLine(
+			response.URL,
+			response.StatusCode,
+			response.Title,
+			response.ContentLength,
+			response.ContentType,
+			fingerprintDisplays,
+			true,
+		)
 
 		if e.showSnippet {
 			var snippetLines []string
@@ -908,24 +883,28 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 				if match == nil {
 					continue
 				}
-				for _, line := range highlightedSnippetLines(match.Snippet, match.DSLMatched) {
-					snippetLines = append(snippetLines, line)
+				for _, snippetLine := range highlightedSnippetLines(match.Snippet, match.DSLMatched) {
+					snippetLines = append(snippetLines, snippetLine)
 				}
 			}
 			if len(snippetLines) > 0 {
-				logMsg.WriteString("\n")
+				var builder strings.Builder
+				builder.WriteString(line)
+				builder.WriteString("\n")
 				for idx, snippetLine := range snippetLines {
 					if idx > 0 {
-						logMsg.WriteString("\n")
+						builder.WriteString("\n")
 					}
-					logMsg.WriteString("  ")
-					logMsg.WriteString(formatter.FormatSnippetArrow())
-					logMsg.WriteString(snippetLine)
+					builder.WriteString("  ")
+					builder.WriteString(formatter.FormatSnippetArrow())
+					builder.WriteString(snippetLine)
 				}
+				logger.Info(builder.String())
+				return
 			}
 		}
 
-		logger.Info(logMsg.String())
+		logger.Info(line)
 	} else {
 		// 调试日志：跳过重复输出
 		tagSuffix := ""
@@ -936,9 +915,7 @@ func (e *Engine) outputFingerprintMatches(matches []*FingerprintMatch, response 
 	}
 }
 
-// ===========================================
 // 主动探测相关方法
-// ===========================================
 
 // TriggerActiveProbing 触发主动探测（异步）
 // 参数: baseURL - 基础URL（如 https://example.com）
