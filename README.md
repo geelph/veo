@@ -5,6 +5,8 @@
 
 **欢迎使用任何同类型工具进行准确性和误报对比**。
 
+作者VX：chainreactor
+
 ---
 [![asciicast](https://asciinema.org/a/nNomQmVMS7vfU6TKbPtCI7Nd0.svg)](https://asciinema.org/a/nNomQmVMS7vfU6TKbPtCI7Nd0)
 
