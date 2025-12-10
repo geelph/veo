@@ -24,6 +24,7 @@ import (
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/processor/auth"
+	"veo/pkg/utils/shared"
 	"veo/proxy"
 )
 
@@ -792,6 +793,19 @@ func applyArgsToConfig(args *CLIArgs) {
 	}
 
 	// 应用输出文件路径
+	
+	// 应用静态资源黑名单配置（从收集器配置中获取）
+	// 这将被用于递归目录扫描中的静态文件过滤
+	if collectorCfg := config.GetCollectorConfig(); collectorCfg != nil {
+		if len(collectorCfg.Static.Extensions) > 0 {
+			shared.SetGlobalStaticExtensions(collectorCfg.Static.Extensions)
+			logger.Debugf("已应用 %d 个静态资源扩展名黑名单到全局配置", len(collectorCfg.Static.Extensions))
+		}
+		if len(collectorCfg.Static.Path) > 0 {
+			shared.SetGlobalStaticPaths(collectorCfg.Static.Path)
+			logger.Debugf("已应用 %d 个静态路径黑名单到全局配置", len(collectorCfg.Static.Path))
+		}
+	}
 }
 
 // handleRuleUpdates 处理指纹库更新逻辑

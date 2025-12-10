@@ -77,7 +77,7 @@
 /actuator/dump
 /actuator/env
 /actuator/env/
-/actuator/env//
+/actuator/env/
 /actuator/env/actuator/liquibase
 /actuator/env/java.home
 /actuator/env/spring.jmx.enabled
@@ -103,7 +103,6 @@
 /actuator/healthcheck
 /actuator/heapdump
 /actuator/heapdump/
-/actuator/heapdump//
 /actuator/heapdump/actuator/loggers/nacos
 /actuator/httptrace
 /actuator/httptrace/actuator/mappings
@@ -152,7 +151,6 @@
 /actuator/nacos;
 /actuator/nacosconfig
 /actuator/nacosconfig/
-/actuator/nacosconfig//
 /actuator/peripheral/swagger-ui.html
 /actuator/peripheral/v2/api-docs
 /actuator/prometheus
@@ -224,7 +222,7 @@
 /dump.sql
 /env
 /env/
-/env//
+/env/
 /env/(name)
 /env/java.home
 /env/nacos
@@ -269,7 +267,6 @@
 /heapdump
 /heapdump.json
 /heapdump/
-/heapdump//
 /httptrace
 /hystrix
 /hystrix.stream
@@ -370,9 +367,9 @@
 /../..;/v2/swagger-ui.html
 /../..;/v2;%0A/api-docs
 /../..;/v3/api-docs
-//v1.8/swagger-ui.html
-//v1.9/swagger-ui.html
-//v2.0/swagger-ui.html
+/v1.8/swagger-ui.html
+/v1.9/swagger-ui.html
+/v2.0/swagger-ui.html
 /admin/swagger-ui.html
 /api-docs
 /api-docs/
@@ -503,8 +500,9 @@
 /v3/api-docs/swagger-config
 /v3/api-docs;.js
 
-# 3. Druid 监控 + Nacos 配置中心 + XXL-Job + Jeecg
-//;//nacosconfig?aa=bbbb
+# 3. 组件路径
+/ejbserver/ejb
+/nacosconfig?aa=bbbb
 /druid
 /druid/
 /druid/basic.json
@@ -549,7 +547,6 @@
 /nacos/v3/service/list?pageSize=123&groupname=default_group&encoding=utf-8
 /nacosconfig
 /nacosconfig/
-/nacosconfig//
 /prod-api/druid/weburi-detail.html
 /prod-api/actuator
 /prod-api;%0A/actuator
@@ -575,6 +572,7 @@
 /admin/ueditor/net/controller.ashx?action=catchimage&encode=utf-8
 /api/service/uploadAvatar
 /api/upload
+/scripts/ueditor/asp.net/controller.ashx?action=catchimage&encode=utf-8
 /content/plugins/ueditor/1.4.3/net/controller.ashx?action=catchimage&encode=utf-8
 /content/plugins/ueditor/net/controller.ashx?action=catchimage&encode=utf-8
 /content/ueditor/1.4.3/net/controller.ashx?action=catchimage&encode=utf-8
@@ -1975,6 +1973,7 @@
 /my/
 /myadmin/login.php
 /myalamycustomer.asmx
+/customer
 /mysql
 /mysql.log
 /net/
@@ -2387,4 +2386,4 @@
 /secret/
 /pprof/
 /old/
-/metri
+/metri/

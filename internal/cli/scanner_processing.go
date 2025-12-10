@@ -16,39 +16,41 @@ import (
 	sharedutils "veo/pkg/utils/shared"
 )
 
-func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPResponse, target string) (*interfaces.FilterResult, error) {
-	logger.Debugf("开始对目标 %s 应用过滤器，响应数量: %d", target, len(responses))
+func (sc *ScanController) applyFilterForTarget(responses []interfaces.HTTPResponse, target string, externalFilter *dirscan.ResponseFilter) (*interfaces.FilterResult, error) {
+	logger.Debugf("开始对目标 %s 应用过滤器，响应数量: %d (外部过滤器: %v)", target, len(responses), externalFilter != nil)
 
-	// 提取站点Key（Scheme + Host）作为过滤器复用的依据
-	// 这样同一站点的不同目录扫描（递归）可以共享Hash过滤状态
-	targetKey := sc.extractBaseURL(target)
+	var responseFilter *dirscan.ResponseFilter
 
-	sc.siteFiltersMu.Lock()
-	responseFilter, exists := sc.siteFilters[targetKey]
-	if !exists {
-		// 如果不存在，创建新的过滤器
-		responseFilter = dirscan.CreateResponseFilterFromExternal()
-		responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
-		responseFilter.EnableFingerprintRuleDisplay(sc.showFingerprintRule)
-
-		// [新增] 如果指纹引擎可用，设置到过滤器中（启用二次识别）
-		if sc.fingerprintEngine != nil {
-			responseFilter.SetFingerprintEngine(sc.fingerprintEngine)
-			logger.Debugf("目录扫描模块已启用指纹二次识别功能，引擎类型: %T", sc.fingerprintEngine)
-		} else {
-			logger.Debugf("指纹引擎为nil，未启用二次识别")
-		}
-
-		sc.siteFilters[targetKey] = responseFilter
-		logger.Debugf("为站点 %s 创建新的过滤器", targetKey)
+	if externalFilter != nil {
+		// 使用传入的外部过滤器（通常用于递归扫描共享状态）
+		responseFilter = externalFilter
+		logger.Debugf("使用外部传入的过滤器")
 	} else {
-		logger.Debugf("复用站点 %s 的过滤器状态", targetKey)
-	}
-	sc.siteFiltersMu.Unlock()
+		// 非递归模式（初始扫描）：使用站点级别缓存
+		targetKey := sc.extractBaseURL(target)
 
-	// [关键修改] 不再调用 responseFilter.Reset()
-	// 因为我们希望在递归扫描过程中保留Hash过滤的历史记录
-	// 从而避免上一层已经出现过的页面内容在下一层再次出现时被误判为新页面
+		sc.siteFiltersMu.Lock()
+		var exists bool
+		responseFilter, exists = sc.siteFilters[targetKey]
+		if !exists {
+			responseFilter = dirscan.CreateResponseFilterFromExternal()
+			responseFilter.EnableFingerprintSnippet(sc.showFingerprintSnippet)
+			responseFilter.EnableFingerprintRuleDisplay(sc.showFingerprintRule)
+
+			if sc.fingerprintEngine != nil {
+				responseFilter.SetFingerprintEngine(sc.fingerprintEngine)
+				logger.Debugf("目录扫描模块已启用指纹二次识别功能，引擎类型: %T", sc.fingerprintEngine)
+			} else {
+				logger.Debugf("指纹引擎为nil，未启用二次识别")
+			}
+
+			sc.siteFilters[targetKey] = responseFilter
+			logger.Debugf("为站点 %s 创建新的过滤器", targetKey)
+		} else {
+			logger.Debugf("复用站点 %s 的过滤器状态", targetKey)
+		}
+		sc.siteFiltersMu.Unlock()
+	}
 
 	// 应用过滤器
 	filterResult := responseFilter.FilterResponses(responses)

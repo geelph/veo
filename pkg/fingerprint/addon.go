@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"veo/pkg/dirscan"
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/shared"
 	"veo/proxy"
@@ -47,54 +48,6 @@ func NewFingerprintAddon(engineConfig *EngineConfig) (*FingerprintAddon, error) 
 	return addon, nil
 }
 
-// isContentTypeFiltered 检查指定Content-Type是否应该被过滤
-// 这是fingerprint模块内部的实现，替代对filter包的依赖
-func isContentTypeFiltered(contentType string) bool {
-	if contentType == "" || contentType == "unknown" {
-		return false // 不过滤未知类型
-	}
-
-	// 需要过滤的Content-Type列表（参考默认配置）
-	filteredTypes := []string{
-		"image/png",
-		"image/jpeg",
-		"image/jpg",
-		"image/gif",
-		"image/webp",
-		"image/svg+xml",
-		"image/bmp",
-		"image/ico",
-		"image/tiff",
-		"video/",
-		"audio/",
-		"application/zip",
-		"application/x-rar-compressed",
-		"application/x-7z-compressed",
-		"application/pdf",
-		"application/msword",
-		"application/vnd.ms-excel",
-		"application/vnd.ms-powerpoint",
-	}
-
-	// 清理Content-Type，移除参数部分（如charset等）
-	cleanContentType := strings.ToLower(strings.TrimSpace(contentType))
-	if idx := strings.Index(cleanContentType, ";"); idx != -1 {
-		cleanContentType = cleanContentType[:idx]
-	}
-
-	// 检查是否在过滤列表中
-	for _, filtered := range filteredTypes {
-		if cleanContentType == strings.ToLower(filtered) {
-			return true
-		}
-		// 支持前缀匹配（如image/开头的所有类型）
-		if strings.HasSuffix(filtered, "/") && strings.HasPrefix(cleanContentType, strings.ToLower(filtered)) {
-			return true
-		}
-	}
-
-	return false
-}
 
 // Requestheaders 实现proxy.Addon接口，在请求头阶段添加防缓存头部
 func (fa *FingerprintAddon) Requestheaders(f *proxy.Flow) {
@@ -136,7 +89,7 @@ func (fa *FingerprintAddon) Response(f *proxy.Flow) {
 
 	// Content-Type过滤检查：跳过图片类型响应
 	contentType := f.Response.Header.Get("Content-Type")
-	if isContentTypeFiltered(contentType) {
+	if dirscan.IsContentTypeFiltered(contentType) {
 		logger.Debugf("Content-Type过滤: 跳过图片类型响应 %s [%s]", f.Request.URL.String(), contentType)
 		return
 	}

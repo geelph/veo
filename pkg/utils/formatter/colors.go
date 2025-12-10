@@ -82,6 +82,15 @@ func FormatURL(url string) string {
 	return getBrandGreenColor() + displayURL + ColorReset + strings.Repeat(" ", padding)
 }
 
+// FormatFullURL 格式化完整URL显示（使用深绿色，不截断，无填充）
+func FormatFullURL(url string) string {
+	if !shouldUseColors() {
+		return url
+	}
+	// 使用品牌绿色显示完整URL
+	return getBrandGreenColor() + url + ColorReset
+}
+
 // FormatFingerprintName 格式化指纹名称显示（统一蓝色显示，无加粗）
 func FormatFingerprintName(name string) string {
 	if !shouldUseColors() {

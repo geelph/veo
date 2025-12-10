@@ -1,10 +1,10 @@
 package dirscan
 
 import (
-	"path"
 	"strings"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
+	"veo/pkg/utils/shared"
 )
 
 // ExtractNextLevelTargets 从扫描结果中提取下一层级的扫描目标
@@ -15,6 +15,8 @@ func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned m
 	var newTargets []string
 	// 本轮去重，防止同一次结果中有重复
 	thisRoundTargets := make(map[string]struct{})
+	fileChecker := shared.NewFileExtensionChecker()
+	pathChecker := shared.NewPathChecker()
 
 	for _, resp := range results {
 		// 只处理状态码为200或403的页面作为目录递归的基础
@@ -28,19 +30,23 @@ func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned m
 			continue
 		}
 
+		// 检查是否是静态文件（如 .css, .js, .png 等）
+		// 如果是静态文件，不进行递归
+		if fileChecker.IsStaticFile(targetURL) {
+			continue
+		}
+
+		// 检查是否在静态目录黑名单中（如 /assets/, /css/ 等）
+		if pathChecker.IsStaticPath(targetURL) {
+			logger.Debugf("跳过黑名单目录: %s", targetURL)
+			continue
+		}
+
 		// 规范化URL，确保以/结尾
 		if !strings.HasSuffix(targetURL, "/") {
-			// 如果不是以/结尾，需要判断是否是文件
-			// 如果有明显的后缀名，且不是常见的目录形式，则跳过
-			ext := path.Ext(targetURL)
-			if ext != "" {
-				// 有后缀名，检查是否是静态资源或已知文件类型
-				// 这里简单判断，如果有后缀通常认为是文件，除非特定的如 /v1.0/ 这种
-				// 但 /v1.0/ 会匹配 HasSuffix("/")
-				// 所以这里如果有后缀，我们保守点不递归，除非它看起来像目录
-				// 对于 actuator 这种没有后缀的，会走到下面
-				continue
-			}
+			// 如果没有以/结尾，且不是静态文件，我们假设它是目录
+			// 之前的逻辑是如果有扩展名就跳过，这会导致 v1.0 这样的目录被跳过
+			// 现在使用 IsStaticFile 精确判断，所以这里可以直接添加 /
 			targetURL += "/"
 		}
 
@@ -70,7 +76,128 @@ func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned m
 	}
 
 	logger.Debugf("从 %d 个结果中提取到 %d 个新递归目标", len(results), len(newTargets))
+	if len(newTargets) > 0 {
+		count := 5
+		if len(newTargets) < count {
+			count = len(newTargets)
+		}
+		logger.Debugf("递归目标示例 (Top %d):", count)
+		for i := 0; i < count; i++ {
+			logger.Debugf("  -> %s", newTargets[i])
+		}
+	}
 	return newTargets
+}
+
+// DataFetcher 数据获取回调函数定义
+type DataFetcher func(urls []string) []interfaces.HTTPResponse
+
+// VerifyDirectoryTargets 验证潜在的递归目录目标
+// candidates: 待验证的目标列表（通常以/结尾）
+// originalResponses: 原始扫描结果（用于对比）
+// fetcher: 用于主动发起请求的回调函数
+func VerifyDirectoryTargets(candidates []string, originalResponses []interfaces.HTTPResponse, fetcher DataFetcher) []string {
+	// 建立索引，方便查找原始响应
+	respMap := make(map[string]interfaces.HTTPResponse)
+	for _, r := range originalResponses {
+		respMap[r.URL] = r
+	}
+
+	var verified []string
+	var urlsToVerify []string // 需要主动探测的
+	var originalURLs []string // 对应的原始URL
+
+	for _, target := range candidates {
+		// ExtractNextLevelTargets 可能会给URL加上后缀/
+		// 我们需要判断它原本是不是带/的
+
+		// 情况1: 原始响应中就有这个Target (说明原本就带/)
+		if _, ok := respMap[target]; ok {
+			verified = append(verified, target)
+			continue
+		}
+
+		// 情况2: 原始响应中没有这个Target，尝试去掉/查找
+		trimmed := strings.TrimSuffix(target, "/")
+		if _, ok := respMap[trimmed]; ok {
+			// 这就是需要验证的情况：原始是不带/的，被强行加了/
+			// 将其加入待验证列表
+			urlsToVerify = append(urlsToVerify, target) // target 是带 / 的
+			originalURLs = append(originalURLs, trimmed)
+		} else {
+			// 情况3: 找不到原始响应（可能是重定向过来的，或者其他情况）
+			// 这种情况下默认保留
+			verified = append(verified, target)
+		}
+	}
+
+	if len(urlsToVerify) == 0 {
+		return verified
+	}
+
+	logger.Debugf("需要主动验证目录有效性的目标: %d 个", len(urlsToVerify))
+
+	// 调用回调批量发起请求
+	responses := fetcher(urlsToVerify)
+
+	// 建立验证结果索引
+	verifyMap := make(map[string]interfaces.HTTPResponse)
+	for _, r := range responses {
+		verifyMap[r.URL] = r
+	}
+
+	for i, targetWithSlash := range urlsToVerify {
+		originalURL := originalURLs[i]
+
+		// 获取两个响应
+		origResp, hasOrig := respMap[originalURL]
+		newResp, hasNew := verifyMap[targetWithSlash]
+
+		if !hasOrig || !hasNew {
+			logger.Debugf("验证失败(请求无响应): %s", targetWithSlash)
+			continue
+		}
+
+		// 对比相似度
+		if isResponseSimilar(origResp, newResp) {
+			logger.Debugf("目录验证通过: %s (内容相似)", targetWithSlash)
+			verified = append(verified, targetWithSlash)
+		} else {
+			logger.Debugf("目录验证拒绝: %s (内容差异大: status %d vs %d, len %d vs %d)",
+				targetWithSlash,
+				origResp.StatusCode, newResp.StatusCode,
+				origResp.ContentLength, newResp.ContentLength)
+		}
+	}
+
+	return verified
+}
+
+// isResponseSimilar 判断两个响应是否相似（用于目录验证）
+func isResponseSimilar(r1, r2 interfaces.HTTPResponse) bool {
+	// 1. 状态码必须一致
+	if r1.StatusCode != r2.StatusCode {
+		return false
+	}
+
+	// 2. 标题必须一致
+	if r1.Title != r2.Title {
+		return false
+	}
+
+	// 3. 长度容错对比
+	diff := r1.ContentLength - r2.ContentLength
+	if diff < 0 {
+		diff = -diff
+	}
+
+	// 动态容错阈值：固定100字节 或 10%
+	tolerance := int64(100)
+	if r1.ContentLength > 1000 {
+		tolerance = r1.ContentLength / 10 // 10%
+	}
+
+	return diff <= tolerance
 }
 
 // RecursionCollector 用于递归扫描的临时收集器

@@ -465,6 +465,7 @@ func CreateResponseFilterFromExternal() *ResponseFilter {
 // 使用formatter包中的格式化函数
 var (
 	formatURL        = formatter.FormatURL
+	formatFullURL    = formatter.FormatFullURL
 	formatStatusCode = formatter.FormatStatusCode
 	formatTitle      = formatter.FormatTitle
 	// formatResultNumber 已废弃，不再使用序号显示
@@ -597,7 +598,7 @@ func (rf *ResponseFilter) printValidPages(pages []interfaces.HTTPResponse) {
 		if len(page.URL) > 60 {
 			messageBuilder.WriteString("\n")
 			messageBuilder.WriteString("  └─ ")
-			messageBuilder.WriteString(page.URL)
+			messageBuilder.WriteString(formatFullURL(page.URL)) // 使用带颜色的格式化函数
 		}
 
 		if rf.showFingerprintSnippet && len(matches) > 0 {

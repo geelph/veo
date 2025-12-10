@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // URLValidator URL验证工具
@@ -170,23 +171,145 @@ func SanitizeFilename(name string) string {
 }
 
 // FileExtensionChecker 文件扩展名检查工具
-type FileExtensionChecker struct{}
-
-// NewFileExtensionChecker 创建文件扩展名检查器
-func NewFileExtensionChecker() *FileExtensionChecker {
-	return &FileExtensionChecker{}
+type FileExtensionChecker struct {
+	extensions []string
 }
 
-// IsStaticFile 检查URL是否为静态文件
-func (c *FileExtensionChecker) IsStaticFile(urlPath string) bool {
-	staticExtensions := []string{
+var (
+	defaultStaticExtensions = []string{
 		".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
 		".woff", ".woff2", ".ttf", ".eot", ".map", ".pdf", ".zip",
 		".rar", ".tar", ".gz", ".doc", ".docx", ".xls", ".xlsx",
 	}
+	globalStaticExtensions []string
+	staticExtensionsMu     sync.RWMutex
 
+	defaultStaticPaths = []string{
+		"/assets/", "/css/", "/js/", "/images/", "/fonts/", "/media/", "/static/", "/public/",
+	}
+	globalStaticPaths []string
+	staticPathsMu     sync.RWMutex
+)
+
+// SetGlobalStaticExtensions 设置全局静态文件扩展名列表
+func SetGlobalStaticExtensions(extensions []string) {
+	staticExtensionsMu.Lock()
+	defer staticExtensionsMu.Unlock()
+
+	// 深拷贝并过滤空值和修正格式（确保以.开头）
+	globalStaticExtensions = make([]string, 0, len(extensions))
+	for _, ext := range extensions {
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		globalStaticExtensions = append(globalStaticExtensions, ext)
+	}
+}
+
+// SetGlobalStaticPaths 设置全局静态路径列表
+func SetGlobalStaticPaths(paths []string) {
+	staticPathsMu.Lock()
+	defer staticPathsMu.Unlock()
+
+	globalStaticPaths = make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// 统一格式：确保以/开头
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		// 确保以/结尾（因为是目录）
+		if !strings.HasSuffix(p, "/") {
+			p = p + "/"
+		}
+		globalStaticPaths = append(globalStaticPaths, p)
+	}
+}
+
+// NewFileExtensionChecker 创建文件扩展名检查器
+func NewFileExtensionChecker() *FileExtensionChecker {
+	staticExtensionsMu.RLock()
+	defer staticExtensionsMu.RUnlock()
+
+	var exts []string
+	if len(globalStaticExtensions) > 0 {
+		exts = make([]string, len(globalStaticExtensions))
+		copy(exts, globalStaticExtensions)
+	} else {
+		exts = make([]string, len(defaultStaticExtensions))
+		copy(exts, defaultStaticExtensions)
+	}
+
+	return &FileExtensionChecker{
+		extensions: exts,
+	}
+}
+
+// PathChecker 路径检查工具
+type PathChecker struct {
+	paths []string
+}
+
+// NewPathChecker 创建路径检查器
+func NewPathChecker() *PathChecker {
+	staticPathsMu.RLock()
+	defer staticPathsMu.RUnlock()
+
+	var paths []string
+	if len(globalStaticPaths) > 0 {
+		paths = make([]string, len(globalStaticPaths))
+		copy(paths, globalStaticPaths)
+	} else {
+		paths = make([]string, len(defaultStaticPaths))
+		copy(paths, defaultStaticPaths)
+	}
+
+	return &PathChecker{
+		paths: paths,
+	}
+}
+
+// IsStaticPath 检查URL路径是否匹配静态目录黑名单
+func (c *PathChecker) IsStaticPath(urlPath string) bool {
+	// 解析 URL 获取路径部分
+	var pathPart string
+	if strings.Contains(urlPath, "://") {
+		if u, err := url.Parse(urlPath); err == nil {
+			pathPart = u.Path
+		} else {
+			pathPart = urlPath
+		}
+	} else {
+		pathPart = urlPath
+	}
+
+	if pathPart == "" {
+		return false
+	}
+
+	lowerPath := strings.ToLower(pathPart)
+	
+	for _, p := range c.paths {
+		// 检查路径中是否包含黑名单目录（例如 /assets/）
+		// 使用 contains 而不是 hasPrefix，因为可能是 /v1/assets/
+		if strings.Contains(lowerPath, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsStaticFile 检查URL是否为静态文件
+func (c *FileExtensionChecker) IsStaticFile(urlPath string) bool {
 	lowerPath := strings.ToLower(urlPath)
-	for _, ext := range staticExtensions {
+	for _, ext := range c.extensions {
 		if strings.HasSuffix(lowerPath, ext) {
 			return true
 		}

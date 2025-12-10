@@ -671,10 +671,6 @@ jupyter-notebook:
   dsl:
     - "contains(body, '<div id=\"ipython_notebook\" class=\"nav navbar-brand\">')"
 
-jymusic:
-  dsl:
-    - "contains(body, 'public/static/libs/jymusic/css')"
-
 kafka-manager:
   dsl:
     - "contains(body, 'vassets/images/2af62f58ee2baf495c9b3a9a1c30ce03-favicon.png')"
@@ -912,10 +908,6 @@ vmware-vrealize-operations-manager:
 vmware-vsphere:
   dsl:
     - "contains(body, 'VMware vSphere')"
-
-xinnet-mail:
-  dsl:
-    - "contains(body, 'cssv2/tamail.css')"
 
 xstream:
   dsl:
@@ -1569,10 +1561,6 @@ secworld-firewall:
   dsl:
     - "contains(body, 'var __permission = \"网神secgate3600 防火墙\"')"
 
-secworld-secips:
-  dsl:
-    - "contains(body, '网神')"
-
 secworld-vpn:
   dsl:
     - "contains(body, 'secworld')"
@@ -2175,12 +2163,6 @@ igenus邮件系统:
   dsl:
     - "contains_all(body, 'iGENUS','login.php','language')"
 
-imo云办公室:
-  dsl:
-    - "contains(body, '<a title=\"imo云办公室\"')"
-    - "contains(body, '高效率网上办公平台')"
-    - "contains(body, 'imo_setup.exe')"
-
 influxdb:
   dsl:
     - "contains(header, 'X-Influxdb')"
@@ -2287,7 +2269,6 @@ nuuo-摄像头:
   dsl:
     - "title('Network Video Recorder Login')"
 
-
 openshift-web-console:
   dsl:
     - "title('OpenShift Web Console')"
@@ -2316,10 +2297,6 @@ phpwind:
 prometheus-server:
   dsl:
     - "title('Prometheus Time Series Collection and Processing Server')"
-
-regentapi_v20:
-  dsl:
-    - "contains(body, 'RegentApi_v2.0')"
 
 richmail-邮件系统:
   dsl:
@@ -2372,10 +2349,6 @@ va-虚拟应用管理平台:
 webmin:
   dsl:
     - "contains_all(body, 'Webmin','session_login')"
-
-weiphp:
-  dsl:
-    - "contains(body, 'weiphp.css')"
 
 wifisky-7层流控路由器:
   dsl:
@@ -2565,19 +2538,12 @@ yzmcms:
 
 天玥网络安全审计系统:
   dsl:
-    - "contains(body, '天玥')"
-    - "contains(body, 'venustech')"
-
+    - "contains_all(body, '天玥','venustech')"
 
 天融信-上网行为管理系统:
   dsl:
     - "contains(body, 'dkey_activex_download.php')"
     - "contains(body, 'login_commit.php')"
-
-天融信topapp负载均衡系统:
-  dsl:
-    - "contains(body, 'TopAPP负载均衡系统')"
-    - "contains(body, '天融信')"
 
 天融信vpn:
   dsl:
@@ -2779,11 +2745,6 @@ waf:
   dsl:
     - "contains(body, '独立运行(无平台)')"
 
-海纳cms-hituxcms:
-  dsl:
-    - "contains(body, 'Powered By HituxCMS')"
-    - "contains(body, 'ServiceCenter.js')"
-
 海翔d8药业云平台:
   dsl:
     - "title('登录海翔')"
@@ -2809,10 +2770,6 @@ waf:
 深信服安全感知平台:
   dsl:
     - "contains(body, '安全感知平台')"
-
-爱信诺开票服务器:
-  dsl:
-    - "contains(body, 'aisino.kps.console')"
 
 用友-畅捷通:
   dsl:
@@ -2860,10 +2817,6 @@ waf:
   dsl:
     - "contains(header, 'CloudWAF')"
 
-移动云绿盟日志审计系统-log4j:
-  dsl:
-    - "contains(body, '/pisces/login/')"
-
 税控服务器管理系统:
   dsl:
     - "contains(body, 'resources/css/login_yzm.css')"
@@ -2891,10 +2844,6 @@ waf:
     - "contains(body, '网神SecGate')"
     - "contains(body, '3600防火墙')"
     - "contains(body, 'css/lsec/login.css')"
-
-网神下一代极速防火墙:
-  dsl:
-    - "contains(body, '网神信息技术')"
 
 群晖-diskstation:
   dsl:
@@ -3006,9 +2955,7 @@ waf:
 
 锐捷-sslvpn:
   dsl:
-    - "contains(body, 'SSLVPN')"
-    - "contains(body, 'rjweb')"
-    - "contains(body, 'rjsslvpn_encookie')"
+    - "contains(body, 'rjweb','rjsslvpn_encookie')"
 
 锐捷交换机-睿易:
   dsl:
@@ -3178,6 +3125,15 @@ PPGo_Job管理后台:
   - "contains(body, 'PPGo_Job管理后台','icon: 2,shade:0.3,time:1000')"
 
 spring-gateway:
-  tags: red,rce,critical
+  tags: red,rce,critical,spring,spring-gateway
   dsl:
   - "contains_all(body, 'gateway','\"href\":','templated')"
+
+东方通TongWeb:
+  path: 
+    - "/ejbserver/ejb"
+    - "/console/"
+  tags: red,rce,critical,tongweb
+  dsl:
+  - "contains(body, 'TongWeb','东方通科技股份有限公司','console/verCode','console/rest/i18n?locale')"
+  - "contains(header, 'TongWeb')"

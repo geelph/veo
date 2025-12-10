@@ -148,13 +148,24 @@ func (ug *URLGenerator) generateURLsForBase(baseURL string, recursive bool) {
 
 	components := ug.extractURLComponents(parsedURL)
 
-	// 生成根目录扫描URL
-	// 在递归模式下，这里的根目录就是传入的完整路径（例如 /actuator/）
-	ug.generateRootURLs(components)
-
-	// 生成路径层级扫描URL
-	// 递归模式下跳过此步骤，避免重复扫描父级目录
-	if !recursive {
+	// 生成扫描URL
+	if recursive {
+		// 递归模式：基于当前 Path 生成 URL
+		// 确保路径以 / 结尾（如果非空）
+		basePath := components.Path
+		if basePath != "" && basePath != "/" {
+			if !strings.HasSuffix(basePath, "/") {
+				basePath += "/"
+			}
+		} else {
+			basePath = ""
+		}
+		
+		commonDict := ug.dictManager.GetCommonDictionary()
+		ug.generateURLsFromDictionary(components, basePath, commonDict, "通用字典(递归)")
+	} else {
+		// 非递归模式：扫描根目录和路径层级
+		ug.generateRootURLs(components)
 		ug.generatePathLevelURLs(components)
 	}
 }

@@ -339,43 +339,71 @@ func (sc *ScanController) performPathProbing(targets []string) []interfaces.HTTP
 	var allResults []interfaces.HTTPResponse
 
 	// 为每个目标执行path探测
-	for _, target := range targets {
-		baseURL := sc.extractBaseURL(target)
-		hostKey := sc.extractHostKey(baseURL)
-
-		// 检查是否已经探测过此主机（避免重复探测）
-		if sc.shouldTriggerPathProbing(hostKey) {
-			logger.Debugf("触发path字段主动探测: %s", hostKey)
-			sc.markHostAsProbed(hostKey)
-
-			// 使用Context控制超时
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			
-			// 调用指纹引擎的主动探测方法
-			results, err := sc.fingerprintEngine.ExecuteActiveProbing(ctx, baseURL, sc.httpClient)
-			cancel()
-
-			if err != nil {
-				logger.Debugf("Active probing error: %v", err)
-				continue
-			}
-
-			if len(results) > 0 {
-				logger.Debugf("Active probing found %d results for %s", len(results), baseURL)
-				for _, res := range results {
-					httpResp := sc.convertProbeResult(res)
-					allResults = append(allResults, httpResp)
-				}
-			}
-			
-			// [新增] 404页面指纹识别
-			if res404 := sc.perform404PageProbing(baseURL); res404 != nil {
-				allResults = append(allResults, *res404)
-			}
-		} else {
-			logger.Debugf("主机已探测过，跳过path探测: %s", hostKey)
-		}
+	// [优化] 使用并发处理以提高批量扫描速度
+	maxConcurrent := sc.requestProcessor.GetConfig().MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = 20
 	}
+	
+	// 使用全局并发数，不再进行1/5限制
+	// 底层RequestProcessor有全局限流，这里可以尽可能多地启动目标处理
+	outerConcurrent := maxConcurrent
+	
+	logger.Debugf("Active Path Probing Concurrency: %d", outerConcurrent)
+	sem := make(chan struct{}, outerConcurrent)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, target := range targets {
+		wg.Add(1)
+		go func(t string) {
+			defer wg.Done()
+			
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			baseURL := sc.extractBaseURL(t)
+			hostKey := sc.extractHostKey(baseURL)
+
+			// 检查是否已经探测过此主机（避免重复探测）
+			if sc.shouldTriggerPathProbing(hostKey) {
+				logger.Debugf("触发path字段主动探测: %s", hostKey)
+				sc.markHostAsProbed(hostKey)
+
+				// 使用Context控制超时
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				
+				// 调用指纹引擎的主动探测方法
+				results, err := sc.fingerprintEngine.ExecuteActiveProbing(ctx, baseURL, sc.httpClient)
+				cancel()
+
+				if err != nil {
+					logger.Debugf("Active probing error: %v", err)
+				}
+
+				if len(results) > 0 {
+					logger.Debugf("Active probing found %d results for %s", len(results), baseURL)
+					for _, res := range results {
+						httpResp := sc.convertProbeResult(res)
+						
+						mu.Lock()
+						allResults = append(allResults, httpResp)
+						mu.Unlock()
+					}
+				}
+				
+				// [新增] 404页面指纹识别
+				if res404 := sc.perform404PageProbing(baseURL); res404 != nil {
+					mu.Lock()
+					allResults = append(allResults, *res404)
+					mu.Unlock()
+				}
+			} else {
+				logger.Debugf("主机已探测过，跳过path探测: %s", hostKey)
+			}
+		}(target)
+	}
+	wg.Wait()
 	return allResults
 }
 

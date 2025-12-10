@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"veo/pkg/utils/formatter"
-	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/redirect"
 	"veo/pkg/utils/shared"
@@ -365,14 +364,11 @@ func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient in
 	}
 
 	if fetcher, ok := httpClient.(redirect.HTTPFetcher); ok {
-		if redirected, err := redirect.FollowClientRedirect(convertToInterfacesResponse(response), fetcher); err == nil && redirected != nil {
-			converted := convertFromInterfacesResponse(redirected)
-			if converted != nil {
-				rMatches := e.AnalyzeResponseWithClientSilent(converted, httpClient)
-				if len(rMatches) > 0 {
-					e.outputFingerprintMatches(rMatches, converted)
-					matches = append(matches, rMatches...)
-				}
+		if redirected, err := redirect.FollowClientRedirect(response, fetcher); err == nil && redirected != nil {
+			rMatches := e.AnalyzeResponseWithClientSilent(redirected, httpClient)
+			if len(rMatches) > 0 {
+				e.outputFingerprintMatches(rMatches, redirected)
+				matches = append(matches, rMatches...)
 			}
 		} else if err != nil {
 			logger.Debugf("客户端重定向抓取失败: %v", err)
@@ -382,38 +378,6 @@ func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient in
 	return matches
 }
 
-func convertToInterfacesResponse(resp *HTTPResponse) *interfaces.HTTPResponse {
-	if resp == nil {
-		return nil
-	}
-	return &interfaces.HTTPResponse{
-		URL:             resp.URL,
-		Method:          resp.Method,
-		StatusCode:      resp.StatusCode,
-		Title:           resp.Title,
-		ContentType:     resp.ContentType,
-		ContentLength:   resp.ContentLength,
-		Body:            resp.Body,
-		ResponseHeaders: resp.ResponseHeaders,
-	}
-}
-
-func convertFromInterfacesResponse(resp *interfaces.HTTPResponse) *HTTPResponse {
-	if resp == nil {
-		return nil
-	}
-	return &HTTPResponse{
-		URL:             resp.URL,
-		Method:          resp.Method,
-		StatusCode:      resp.StatusCode,
-		Body:            resp.Body,
-		ContentType:     resp.ContentType,
-		ContentLength:   resp.ContentLength,
-		Server:          resp.Server,
-		Title:           resp.Title,
-		ResponseHeaders: resp.ResponseHeaders,
-	}
-}
 
 // AnalyzeResponseWithClientSilent 分析响应包并进行指纹识别（静默版本，不自动输出结果）
 // 专用于404页面等需要自定义输出格式的场景
@@ -1076,61 +1040,72 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 	if concurrency <= 0 {
 		concurrency = 20
 	}
-	sem := make(chan struct{}, concurrency)
+
+	// 任务通道
+	taskChan := make(chan task, len(tasks))
+	for _, t := range tasks {
+		taskChan <- t
+	}
+	close(taskChan)
+
 	var wg sync.WaitGroup
 
-	for _, t := range tasks {
+	// 启动固定数量的工作协程
+	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
-		go func(tk task) {
+		go func() {
 			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case tk, ok := <-taskChan:
+					if !ok {
+						return
+					}
+					
+					probeURL := buildProbeURLFromParts(scheme, host, tk.path)
+					
+					// 构造Headers
+					var headers map[string]string
+					if tk.rule.HasHeaders() {
+						headers = tk.rule.GetHeaderMap()
+					}
 
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
+					// 发起请求
+					body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, probeURL, headers)
+					if err != nil {
+						continue
+					}
 
-			probeURL := buildProbeURLFromParts(scheme, host, tk.path)
-			
-			// 构造Headers
-			var headers map[string]string
-			if tk.rule.HasHeaders() {
-				headers = tk.rule.GetHeaderMap()
-			}
+					// 构造响应对象
+					resp := &HTTPResponse{
+						URL:             probeURL,
+						Method:          "GET",
+						StatusCode:      statusCode,
+						ResponseHeaders: make(map[string][]string),
+						Body:            body,
+						ContentType:     "text/html",
+						ContentLength:   int64(len(body)),
+						Title:           shared.ExtractTitle(body),
+					}
 
-			// 发起请求
-			body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, probeURL, headers)
-			if err != nil {
-				return
+					// 匹配规则
+					dslCtx := e.createDSLContextWithClient(resp, httpClient, baseURL)
+					if match := e.matchRule(tk.rule, dslCtx); match != nil {
+						// 输出日志
+						e.outputFingerprintMatches([]*FingerprintMatch{match}, resp, "主动探测")
+						
+						resultsMu.Lock()
+						results = append(results, &ProbeResult{
+							Response: resp,
+							Matches:  []*FingerprintMatch{match},
+						})
+						resultsMu.Unlock()
+					}
+				}
 			}
-
-			// 构造响应对象
-			resp := &HTTPResponse{
-				URL:             probeURL,
-				Method:          "GET",
-				StatusCode:      statusCode,
-				ResponseHeaders: make(map[string][]string),
-				Body:            body,
-				ContentType:     "text/html",
-				ContentLength:   int64(len(body)),
-				Title:           shared.ExtractTitle(body),
-			}
-
-			// 匹配规则
-			dslCtx := e.createDSLContextWithClient(resp, httpClient, baseURL)
-			if match := e.matchRule(tk.rule, dslCtx); match != nil {
-				// 输出日志
-				e.outputFingerprintMatches([]*FingerprintMatch{match}, resp, "主动探测")
-				
-				resultsMu.Lock()
-				results = append(results, &ProbeResult{
-					Response: resp,
-					Matches:  []*FingerprintMatch{match},
-				})
-				resultsMu.Unlock()
-			}
-		}(t)
+		}()
 	}
 
 	wg.Wait()
