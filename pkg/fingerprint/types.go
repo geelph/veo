@@ -62,6 +62,12 @@ type Engine struct {
 	mu          sync.RWMutex        // 仅用于保护 matches 切片并发写入
 }
 
+// ProbeResult 主动探测结果
+type ProbeResult struct {
+	Response *HTTPResponse       // 响应对象
+	Matches  []*FingerprintMatch // 匹配结果
+}
+
 // StringList 支持标量或数组的字符串列表解析
 type StringList []string
 

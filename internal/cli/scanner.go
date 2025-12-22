@@ -197,7 +197,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		siteFilters:            make(map[string]*dirscan.ResponseFilter),
 	}
 
-	sc.httpClient = sc.createHTTPClientAdapter()
+	sc.httpClient = sc.requestProcessor
 	return sc
 }
 
@@ -465,11 +465,3 @@ func (sc *ScanController) runModuleForTargetsWithContext(ctx context.Context, mo
 	}
 }
 
-// createHTTPClientAdapter 创建HTTP客户端（支持TLS和重定向）
-func (sc *ScanController) createHTTPClientAdapter() httpclient.HTTPClientInterface {
-	if sc.requestProcessor == nil {
-		logger.Warn("RequestProcessor 未初始化，无法复用连接池，回退到独立HTTP客户端")
-		return httpclient.New(httpclient.DefaultConfig())
-	}
-	return newRequestProcessorHTTPClient(sc.requestProcessor)
-}

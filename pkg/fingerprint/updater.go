@@ -116,7 +116,7 @@ func (u *Updater) GetLocalVersion() (string, error) {
 // GetRemoteVersion 获取远程版本
 func (u *Updater) GetRemoteVersion() (string, error) {
 	client := &http.Client{
-		Timeout: 3 * time.Second, // 缩短超时时间到3秒，避免启动阻塞过久
+		Timeout: 1 * time.Second, // 缩短超时时间到1秒，避免启动阻塞过久
 	}
 	// 只读取前4KB来获取版本信息，节省流量
 	// 注意：如果服务器不支持Range，可能需要下载完整文件，这里简单起见直接GET

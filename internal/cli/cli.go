@@ -342,7 +342,7 @@ func startApplication(args *CLIArgs) error {
 		requestProcessor.SetModuleContext("fingerprint-passive")
 
 		// 5. 使用适配器转换为 HTTPClientInterface
-		httpClient := newRequestProcessorHTTPClient(requestProcessor)
+		httpClient := requestProcessor
 
 		// 6. 注入到指纹识别模块
 		app.fingerprintAddon.SetHTTPClient(httpClient)

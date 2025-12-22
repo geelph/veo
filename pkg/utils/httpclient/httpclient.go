@@ -3,15 +3,15 @@ package httpclient
 import (
 	"crypto/tls"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"veo/pkg/utils/logger"
 	"veo/pkg/utils/redirect"
+	"veo/pkg/utils/shared"
 	"veo/pkg/utils/useragent"
+
+	"github.com/valyala/fasthttp"
 )
 
 // 接口定义
@@ -29,8 +29,6 @@ type HeaderAwareClient interface {
 	MakeRequestWithHeaders(rawURL string, headers map[string]string) (body string, statusCode int, err error)
 }
 
-// 配置结构
-
 // Config HTTP客户端配置结构
 type Config struct {
 	Timeout        time.Duration     // 请求超时时间
@@ -41,6 +39,9 @@ type Config struct {
 	TLSTimeout     time.Duration     // TLS握手超时
 	ProxyURL       string            // 上游代理URL
 	CustomHeaders  map[string]string // 自定义HTTP头部
+	SameHostOnly   bool              // 重定向仅限同主机
+	MaxBodySize    int               // 最大响应体大小(字节)
+	MaxConcurrent  int               // 最大并发连接数
 }
 
 // DefaultConfig 获取默认HTTP客户端配置（安全扫描优化版）
@@ -57,6 +58,8 @@ func DefaultConfig() *Config {
 		UserAgent:      ua,
 		SkipTLSVerify:  true,            // 网络安全扫描工具常用设置
 		TLSTimeout:     5 * time.Second, // TLS握手超时
+		MaxBodySize:    10 * 1024 * 1024, // 10MB
+		MaxConcurrent:  1000,
 	}
 }
 
@@ -69,16 +72,17 @@ func DefaultConfigWithUserAgent(userAgent string) *Config {
 	return config
 }
 
-// 通用HTTP客户端实现（支持TLS配置和重定向）
+// 通用HTTP客户端实现（基于 fasthttp）
 
 // Client 通用HTTP客户端实现
-// 支持配置化的重定向跟随和TLS配置功能
 type Client struct {
-	client         *http.Client
+	client         *fasthttp.Client
+	timeout        time.Duration     // 单次请求超时
 	followRedirect bool              // 是否跟随重定向
 	maxRedirects   int               // 最大重定向次数
 	userAgent      string            // User-Agent
 	customHeaders  map[string]string // 自定义HTTP头部
+	sameHostOnly   bool              // 重定向仅限同主机
 }
 
 // New 创建配置化的HTTP客户端（支持TLS）
@@ -87,52 +91,46 @@ func New(config *Config) *Client {
 		config = DefaultConfig()
 	}
 
-	// 创建TLS配置
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: config.SkipTLSVerify,
-		ServerName:         "", // 允许IP地址连接
-		MinVersion:         tls.VersionTLS10,
-		MaxVersion:         tls.VersionTLS13,
+	// 创建 fasthttp 客户端
+	fastClient := &fasthttp.Client{
+		Name:                config.UserAgent,
+		ReadTimeout:         config.Timeout,
+		WriteTimeout:        config.Timeout,
+		MaxConnsPerHost:     config.MaxConcurrent,
+		MaxIdleConnDuration: 30 * time.Second,
+		MaxResponseBodySize: config.MaxBodySize,
+		ReadBufferSize:      16384, // 16KB
+		TLSConfig: &tls.Config{
+			InsecureSkipVerify: config.SkipTLSVerify,
+			Renegotiation:      tls.RenegotiateOnceAsClient,
+		},
+		DisablePathNormalizing:        true,
+		DisableHeaderNamesNormalizing: true,
+		NoDefaultUserAgentHeader:      true, // 我们自己控制 UA
 	}
 
-	transport := &http.Transport{
-		MaxIdleConns:        1000,             // 性能优化：增加最大空闲连接数
-		IdleConnTimeout:     90 * time.Second, // 性能优化：延长空闲连接超时时间
-		DisableCompression:  false,
-		MaxIdleConnsPerHost: 200, // 性能优化：增加每个Host的最大空闲连接数
-		TLSClientConfig:     tlsConfig,
-		TLSHandshakeTimeout: config.TLSTimeout,
-		ForceAttemptHTTP2:   true, // 性能优化：强制尝试HTTP/2
-	}
-
-	// 配置代理
+	// 配置代理 Dial
 	if config.ProxyURL != "" {
-		if proxyURL, err := url.Parse(config.ProxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(proxyURL)
-			logger.Debugf("HTTPClient使用代理: %s", config.ProxyURL)
-		} else {
-			logger.Warnf("无效的代理URL: %s, 错误: %v", config.ProxyURL, err)
+		dialFunc := FasthttpDialerFactory(config.ProxyURL, 5*time.Second)
+		if dialFunc != nil {
+			fastClient.Dial = dialFunc
 		}
 	}
 
-	client := &http.Client{
-		Timeout:   config.Timeout,
-		Transport: transport,
-	}
-
-	// 配置重定向策略
-	// 统一禁用net/http的自动重定向，交由redirect.Execute统一管理
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-
 	return &Client{
-		client:         client,
+		client:         fastClient,
+		timeout:        config.Timeout,
 		followRedirect: config.FollowRedirect,
 		maxRedirects:   config.MaxRedirects,
 		userAgent:      config.UserAgent,
 		customHeaders:  config.CustomHeaders,
+		sameHostOnly:   config.SameHostOnly,
 	}
+}
+
+// SetSameHostOnly 设置是否仅限同主机重定向
+func (c *Client) SetSameHostOnly(enabled bool) {
+	c.sameHostOnly = enabled
 }
 
 // httpClientFetcher 适配器，用于将Client适配为redirect.HTTPFetcherFull接口
@@ -142,6 +140,7 @@ type httpClientFetcher struct {
 }
 
 func (f *httpClientFetcher) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
+	// 调用底层单次请求
 	return f.client.doRequestInternal(rawURL, f.customHeaders)
 }
 
@@ -160,6 +159,11 @@ func (c *Client) MakeRequestFull(rawURL string) (body string, statusCode int, he
 	return c.executeRequestFull(rawURL, nil)
 }
 
+// MakeRequestFullWithHeaders 支持自定义请求头的扩展HTTP请求接口，返回响应头
+func (c *Client) MakeRequestFullWithHeaders(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+	return c.executeRequestFull(rawURL, customHeaders)
+}
+
 func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) (body string, statusCode int, err error) {
 	body, statusCode, _, err = c.executeRequestFull(rawURL, customHeaders)
 	return
@@ -170,7 +174,7 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 	redirectConfig := &redirect.Config{
 		MaxRedirects:   c.maxRedirects,
 		FollowRedirect: c.followRedirect,
-		SameHostOnly:   false, // 指纹识别默认不限制跨域跳转
+		SameHostOnly:   c.sameHostOnly,
 	}
 
 	// 构造Fetcher适配器
@@ -188,104 +192,71 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 	return resp.Body, resp.StatusCode, resp.ResponseHeaders, nil
 }
 
+// doRequestInternal 执行单次请求（fasthttp implementation）
 func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
-	logger.Debugf("发起请求: %s (跟随重定向: %v)", rawURL, c.followRedirect)
+	// Acquire objects
+	req := fasthttp.AcquireRequest()
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
 
-	// 创建请求
-	req, err := http.NewRequest("GET", rawURL, nil)
-	if err != nil {
-		return "", 0, nil, fmt.Errorf("创建请求失败: %v", err)
-	}
-
-	// 设置请求头
-	c.setRequestHeaders(req)
-	if len(customHeaders) > 0 {
-		for key, value := range customHeaders {
-			trimmedKey := strings.TrimSpace(key)
-			if trimmedKey == "" {
-				continue
-			}
-			req.Header.Set(trimmedKey, value)
-		}
-	}
-
-	// 发起请求
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", 0, nil, c.handleRequestError(err)
-	}
-	defer resp.Body.Close()
-
-	// 处理重定向响应
-	if c.isRedirectResponse(resp.StatusCode) && !c.followRedirect {
-		logger.Debugf("检测到重定向响应 %d，但未启用跟随: %s", resp.StatusCode, rawURL)
-	}
-
-	// 提取响应头
-	headers = make(map[string][]string)
-	for k, v := range resp.Header {
-		headers[k] = v
-	}
-
-	// 读取响应体
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", resp.StatusCode, headers, fmt.Errorf("读取响应体失败: %v", err)
-	}
-
-	logger.Debugf("请求完成: %s [%d] 响应体: %d bytes", rawURL, resp.StatusCode, len(respBody))
-	return string(respBody), resp.StatusCode, headers, nil
-}
-
-// 辅助方法
-
-// setRequestHeaders 设置标准请求头（包括全局自定义头部）
-func (c *Client) setRequestHeaders(req *http.Request) {
-	// 设置标准请求头
+	// Prepare Request
+	req.SetRequestURI(rawURL)
+	req.Header.SetMethod(fasthttp.MethodGet)
+	
+	// Default Headers
 	req.Header.Set("User-Agent", c.userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
-
-	// [新增] 为指纹识别添加自定义Cookie头
-	req.Header.Set("Cookie", "rememberMe=1")
-
-	// 应用配置中的自定义头部（如学习到的认证头部）
-	c.applyCustomHeaders(req)
-}
-
-// applyCustomHeaders 应用配置中的自定义HTTP头部
-func (c *Client) applyCustomHeaders(req *http.Request) {
+	
+	// Apply Global Custom Headers
 	if len(c.customHeaders) > 0 {
-		// 应用自定义头部到请求
-		for key, value := range c.customHeaders {
-			req.Header.Set(key, value)
-		}
-
-		logger.Debugf("应用了 %d 个自定义HTTP头部: %s", len(c.customHeaders), req.URL.String())
-
-		// 记录应用的头部（调试用）
-		for key, value := range c.customHeaders {
-			// 对敏感信息进行遮蔽显示
-			maskedValue := c.maskSensitiveValue(value)
-			logger.Debugf("自定义头部: %s = %s", key, maskedValue)
+		for k, v := range c.customHeaders {
+			req.Header.Set(k, v)
 		}
 	}
-}
 
-// maskSensitiveValue 遮蔽敏感值用于日志输出
-func (c *Client) maskSensitiveValue(value string) string {
-	if len(value) <= 8 {
-		return strings.Repeat("*", len(value))
+	// Apply Per-Request Custom Headers
+	if len(customHeaders) > 0 {
+		for k, v := range customHeaders {
+			trimmedKey := strings.TrimSpace(k)
+			if trimmedKey != "" {
+				req.Header.Set(trimmedKey, v)
+			}
+		}
 	}
 
-	// 显示前4个和后4个字符，中间用*代替
-	prefix := value[:4]
-	suffix := value[len(value)-4:]
-	middle := strings.Repeat("*", len(value)-8)
+	// Execute
+	if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
+		return "", 0, nil, c.handleRequestError(err)
+	}
 
-	return prefix + middle + suffix
+	// Extract Info
+	statusCode = resp.StatusCode()
+	
+	// Headers Map
+	headers = make(map[string][]string)
+	resp.Header.VisitAll(func(key, value []byte) {
+		k := string(key)
+		v := string(value)
+		headers[k] = append(headers[k], v)
+	})
+
+	// Body Decompression (if needed) & String Conversion
+	contentEncoding := string(resp.Header.Peek("Content-Encoding"))
+	var respBody []byte
+	if contentEncoding != "" {
+		respBody = shared.DecompressByEncoding(resp.Body(), contentEncoding)
+	} else {
+		respBody = resp.Body()
+	}
+	
+	// Convert to string (Copy happens here, safe to release Response after)
+	body = string(respBody)
+
+	logger.Debugf("Fasthttp请求完成: %s [%d] Size: %d", rawURL, statusCode, len(body))
+	return body, statusCode, headers, nil
 }
 
 // handleRequestError 处理请求错误（统一TLS错误处理）
@@ -294,14 +265,5 @@ func (c *Client) handleRequestError(err error) error {
 	if strings.Contains(errStr, "tls:") || strings.Contains(errStr, "x509:") {
 		return fmt.Errorf("TLS连接失败 (可能需要跳过证书验证): %v", err)
 	}
-	if strings.Contains(errStr, "Unsolicited response received on idle HTTP channel") {
-		logger.Debugf("忽略远端推送的空闲连接响应: %v", err)
-		return nil
-	}
 	return fmt.Errorf("请求失败: %v", err)
-}
-
-// isRedirectResponse 检查是否为重定向响应
-func (c *Client) isRedirectResponse(statusCode int) bool {
-	return statusCode >= 300 && statusCode < 400
 }

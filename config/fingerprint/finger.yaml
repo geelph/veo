@@ -576,8 +576,9 @@ jboss-eap:
 
 jeecgboot:
   dsl:
-    - "contains(body, 'jeecg-boot','polyfill_','casPrefixUrl','load_title')"
+    - "contains(body,'.app-loading','.app-loading-title','.app-loading-wrap')"
     - "contains_all(body, 'absolute','9999999999999','#FFF','Open Sans','load_title')"
+    - "icon('/favicon.ico', '599637f95d6a1c0208bf41d8ff72f364')"
 
 jeecms:
   dsl:

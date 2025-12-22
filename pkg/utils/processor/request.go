@@ -11,19 +11,16 @@ import (
 	"veo/pkg/utils/httpclient"
 	"veo/pkg/utils/interfaces"
 	"veo/pkg/utils/processor/auth"
-	"veo/pkg/utils/redirect"
 	"veo/pkg/utils/shared"
 	"veo/pkg/utils/useragent"
 	"veo/proxy"
 	"veo/pkg/utils/logger"
-
-	"github.com/valyala/fasthttp"
 )
 
 // RequestProcessor 请求处理器
 type RequestProcessor struct {
 	proxy.BaseAddon
-	client         *fasthttp.Client
+	client         *httpclient.Client
 	config         *RequestConfig
 	mu             sync.RWMutex
 	userAgentPool  []string               // UserAgent池
@@ -35,8 +32,7 @@ type RequestProcessor struct {
 	// 新增：HTTP认证头部管理
 	customHeaders        map[string]string  // CLI指定的自定义头部
 	authDetector         *auth.AuthDetector // 认证检测器
-	redirectClient       httpclient.HTTPClientInterface
-	redirectSameHostOnly bool // 是否限制重定向在同主机
+	redirectSameHostOnly bool               // 是否限制重定向在同主机
 }
 
 // 构造函数
@@ -47,8 +43,19 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		config = getDefaultConfig()
 	}
 
+	// 转换配置到 httpclient.Config
+	clientConfig := &httpclient.Config{
+		Timeout:        config.Timeout,
+		FollowRedirect: config.FollowRedirect,
+		MaxRedirects:   config.MaxRedirects,
+		UserAgent:      "", // 动态设置
+		SkipTLSVerify:  true,
+		ProxyURL:       config.ProxyURL,
+		SameHostOnly:   true, // 默认开启同源限制，后续可通过SetRedirectSameHostOnly修改
+	}
+
 	processor := &RequestProcessor{
-		client:         createFastHTTPClient(config),
+		client:         httpclient.New(clientConfig),
 		config:         config,
 		userAgentPool:  initializeUserAgentPool(config),
 		titleExtractor: shared.NewTitleExtractor(),
@@ -56,7 +63,6 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 		// 新增：初始化认证头部管理
 		customHeaders:        make(map[string]string),
 		authDetector:         auth.NewAuthDetector(),
-		redirectClient:       httpclient.New(nil),
 		redirectSameHostOnly: true,
 	}
 
@@ -84,7 +90,6 @@ func (rp *RequestProcessor) CloneWithContext(moduleContext string, timeout time.
 		batchMode:            true,
 		customHeaders:        make(map[string]string),
 		authDetector:         auth.NewAuthDetector(),
-		redirectClient:       httpclient.New(nil),
 		redirectSameHostOnly: rp.redirectSameHostOnly,
 	}
 
@@ -101,6 +106,8 @@ func (rp *RequestProcessor) SetRedirectSameHostOnly(enabled bool) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	rp.redirectSameHostOnly = enabled
+	// 同时更新client配置
+	rp.client.SetSameHostOnly(enabled)
 }
 
 // IsRedirectSameHostOnly 返回当前同主机限制配置
@@ -249,24 +256,14 @@ func (rp *RequestProcessor) processURLsConcurrent(urls []string, responses *[]*i
 	wg.Wait()
 }
 
-// requestFetcher 适配器，用于将RequestProcessor适配为redirect.HTTPFetcherFull接口
-type requestFetcher struct {
-	rp *RequestProcessor
-}
-
-func (f *requestFetcher) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
-	resp, err := f.rp.makeRequest(rawURL)
-	if err != nil {
-		return "", 0, nil, err
-	}
-	return resp.Body, resp.StatusCode, resp.ResponseHeaders, nil
-}
-
 // processURL 处理单个URL
 func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 	var response *interfaces.HTTPResponse
 	var err error
-	sameHostOnly := rp.IsRedirectSameHostOnly()
+	
+	// 确保client配置同步（虽然SetRedirectSameHostOnly会同步，但为了保险起见）
+	// 注意：这里读取可能会有竞态，但rp.client内部也是并发安全的
+	rp.client.SetSameHostOnly(rp.IsRedirectSameHostOnly())
 
 	// 改进的重试逻辑（指数退避 + 抖动）
 	for attempt := 0; attempt <= rp.config.MaxRetries; attempt++ {
@@ -274,16 +271,8 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 			logger.Debug(fmt.Sprintf("重试 %d/%d: %s", attempt, rp.config.MaxRetries, url))
 		}
 
-		// 构造重定向配置
-		redirectConfig := &redirect.Config{
-			MaxRedirects:   rp.config.MaxRedirects,
-			FollowRedirect: rp.config.FollowRedirect,
-			SameHostOnly:   sameHostOnly,
-		}
-
-		// 执行请求（包含重定向处理）
-		fetcher := &requestFetcher{rp: rp}
-		response, err = redirect.Execute(url, fetcher, redirectConfig)
+		// 执行请求（httpclient内部处理重定向）
+		response, err = rp.makeRequest(url)
 
 		if err == nil {
 			return response
@@ -304,7 +293,7 @@ func (rp *RequestProcessor) processURL(url string) *interfaces.HTTPResponse {
 			if baseDelay > 2*time.Second {
 				baseDelay = 2 * time.Second
 			}
-			
+
 			jitter := time.Duration(rand.Intn(100)) * time.Millisecond // 减少抖动范围
 			delay := baseDelay + jitter
 			logger.Debugf("重试延迟: %v (基础: %v, 抖动: %v)", delay, baseDelay, jitter)
@@ -324,47 +313,34 @@ func (rp *RequestProcessor) DoRequest(rawURL string, headers map[string]string) 
 	return rp.makeRequestWithHeaders(rawURL, headers)
 }
 
-// makeRequest 使用fasthttp发起请求
+// makeRequest 使用httpclient发起请求
 func (rp *RequestProcessor) makeRequest(rawURL string) (*interfaces.HTTPResponse, error) {
 	return rp.makeRequestWithHeaders(rawURL, nil)
 }
 
 func (rp *RequestProcessor) makeRequestWithHeaders(rawURL string, extraHeaders map[string]string) (*interfaces.HTTPResponse, error) {
-	req := fasthttp.AcquireRequest()
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseRequest(req)
-	defer fasthttp.ReleaseResponse(resp)
-
-	rp.prepareRequest(req, rawURL)
-	if len(extraHeaders) > 0 {
-		for key, value := range extraHeaders {
-			trimmedKey := strings.TrimSpace(key)
-			if trimmedKey == "" {
-				continue
-			}
-			req.Header.Set(trimmedKey, value)
-		}
+	// 准备头部
+	headers := rp.getDefaultHeaders()
+	for k, v := range extraHeaders {
+		headers[k] = v
 	}
+
 	startTime := time.Now()
 
-	err := rp.client.DoTimeout(req, resp, rp.config.Timeout)
+	// 使用 httpclient 发起请求
+	body, statusCode, respHeaders, err := rp.client.MakeRequestFullWithHeaders(rawURL, headers)
 	if err != nil {
 		rp.logRequestError(rawURL, err)
 		return nil, fmt.Errorf("请求失败: %v", err)
 	}
 
-	duration := time.Since(startTime)
-	logger.Debug(fmt.Sprintf("fasthttp请求完成: %s [%d] 耗时: %v",
-		rawURL, resp.StatusCode(), duration))
+	// 还原 requestHeaders (近似值，用于报告)
+	requestHeaders := make(map[string][]string)
+	for k, v := range headers {
+		requestHeaders[k] = []string{v}
+	}
 
-	return rp.buildHTTPResponse(rawURL, req, resp, startTime)
-}
-
-// prepareRequest 准备HTTP请求
-func (rp *RequestProcessor) prepareRequest(req *fasthttp.Request, rawURL string) {
-	req.SetRequestURI(rawURL)
-	req.Header.SetMethod(fasthttp.MethodGet)
-	rp.setRequestHeaders(&req.Header)
+	return rp.processResponse(rawURL, statusCode, body, respHeaders, requestHeaders, startTime)
 }
 
 // logRequestError 记录请求错误日志
@@ -376,12 +352,6 @@ func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
 	} else {
 		logger.Debugf("请求异常: %s, 错误: %v", rawURL, err)
 	}
-}
-
-// buildHTTPResponse 构建HTTP响应对象
-func (rp *RequestProcessor) buildHTTPResponse(rawURL string, req *fasthttp.Request, resp *fasthttp.Response, startTime time.Time) (*interfaces.HTTPResponse, error) {
-	requestHeaders := rp.extractRequestHeaders(&req.Header)
-	return rp.processResponse(rawURL, resp, requestHeaders, startTime)
 }
 
 // 公共接口方法
@@ -399,7 +369,17 @@ func (rp *RequestProcessor) UpdateConfig(config *RequestConfig) {
 	defer rp.mu.Unlock()
 
 	rp.config = config
-	rp.client = createFastHTTPClient(config)
+	
+	clientConfig := &httpclient.Config{
+		Timeout:        config.Timeout,
+		FollowRedirect: config.FollowRedirect,
+		MaxRedirects:   config.MaxRedirects,
+		UserAgent:      "", // 动态设置
+		SkipTLSVerify:  true,
+		ProxyURL:       config.ProxyURL,
+		SameHostOnly:   rp.redirectSameHostOnly,
+	}
+	rp.client = httpclient.New(clientConfig)
 
 	// 更新UserAgent池
 	rp.userAgentPool = initializeUserAgentPool(config)
@@ -454,9 +434,7 @@ func (rp *RequestProcessor) IsBatchMode() bool {
 
 // Close 关闭请求处理器，清理资源
 func (rp *RequestProcessor) Close() {
-	if rp.client != nil {
-		rp.client.CloseIdleConnections()
-	}
+	// httpclient 通常不需要显式关闭，但在需要时可以扩展
 	logger.Info("请求处理器已关闭")
 }
 
@@ -597,4 +575,16 @@ func (rp *RequestProcessor) MakeRequestWithHeaders(rawURL string, headers map[st
 		return "", 0, fmt.Errorf("empty response")
 	}
 	return resp.ResponseBody, resp.StatusCode, nil
+}
+
+// MakeRequestFull 实现 redirect.HTTPFetcherFull 接口
+func (rp *RequestProcessor) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
+	resp, err := rp.DoRequest(rawURL, nil)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	if resp == nil {
+		return "", 0, nil, fmt.Errorf("empty response")
+	}
+	return resp.Body, resp.StatusCode, resp.ResponseHeaders, nil
 }
