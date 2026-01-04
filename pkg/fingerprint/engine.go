@@ -68,6 +68,9 @@ func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient http
 	// 检查是否应该过滤此响应
 	if e.config.EnableFiltering && e.shouldFilterResponse(response) {
 		atomic.AddInt64(&e.stats.FilteredRequests, 1)
+		if !silent && e.config.OutputFormatter != nil {
+			e.config.OutputFormatter.FormatNoMatch(response)
+		}
 		return nil
 	}
 

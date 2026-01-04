@@ -30,7 +30,6 @@
 /WEB-INF/conf/caches.properties
 /actuator
 /actuator/
-
 /actuator/./
 /actuator/./env
 /actuator/./heapdump
@@ -634,7 +633,10 @@
 /uploads/include/dialog/select_soft_post.php
 
 # 5. 管理后台 & 弱口令组件 & 未授权接口
-/;/admin
+/Uploadify.ashx
+/Uploadify.aspx
+/Uploadify.asp
+/App_Handler/
 /Login.aspx
 /Login/Login
 /WEB-INF/config/dashboard-statistics.xml
@@ -1089,7 +1091,7 @@
 /Admin
 /Admin.aspx
 /Admin/
-/AdminSys/
+/adminsys/
 /AjaxService.asmx
 /App/
 /Ashx/

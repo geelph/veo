@@ -252,12 +252,10 @@ func (sc *ScanController) runActiveMode() error {
 						case <-done:
 							return
 						case <-time.After(3 * time.Second):
-							logger.Warn("仍未退出，强制结束进程")
 							os.Exit(1)
 						}
 					}()
 				} else {
-					logger.Warn("再次中断，强制结束进程")
 					os.Exit(1)
 				}
 			case <-done:

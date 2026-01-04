@@ -247,6 +247,11 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 		return nil
 	}
 
+	if sc.args != nil && sc.args.NoProbe {
+		logger.Debug("已禁用主动探测 (--no-probe)")
+		return nil
+	}
+
 	// 检查Context是否取消
 	select {
 	case <-ctx.Done():

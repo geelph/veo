@@ -9,6 +9,14 @@ import (
 	"veo/pkg/utils/shared"
 )
 
+type cancelReasonKey struct{}
+
+// CancelReasonKey 用于在Context中标记取消原因
+var CancelReasonKey = cancelReasonKey{}
+
+// CancelReasonWAF 表示因疑似WAF超时过多而取消
+const CancelReasonWAF = "waf-timeout"
+
 // LayerScanner 单层扫描器接口
 // 负责执行单个层级的扫描任务（不论是并发还是顺序）
 // depth: 当前递归深度（0表示初始层）
@@ -42,6 +50,9 @@ func RunRecursiveScan(
 		// 检查Context取消
 		select {
 		case <-ctx.Done():
+			if reason, ok := ctx.Value(CancelReasonKey).(string); ok && reason == CancelReasonWAF {
+				return allResults, nil
+			}
 			if maxDepth > 0 {
 				logger.Warn("递归扫描被取消")
 			} else {

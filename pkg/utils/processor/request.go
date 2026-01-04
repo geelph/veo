@@ -327,15 +327,11 @@ func (rp *RequestProcessor) processURLWithContext(ctx context.Context, url strin
 		}
 	}
 
-	response, err := rp.makeRequest(url)
-	if err == nil {
-		return response, nil
+	response, err := rp.makeRequestWithHeadersRetry(ctx, url, nil)
+	if err != nil {
+		return nil, err
 	}
-
-	if !rp.isRetryableError(err) {
-		logger.Debugf("不可重试的错误，停止重试: %s, 错误: %v", url, err)
-	}
-	return nil, err
+	return response, nil
 }
 
 // HTTP请求相关方法

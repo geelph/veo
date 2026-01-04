@@ -62,10 +62,17 @@ func (d *Deduplicator) generateCacheKey(rawURL string, fingerprintNames []string
 		return rawURL
 	}
 
+	scheme := strings.TrimSpace(parsedURL.Scheme)
+	if scheme == "" {
+		scheme = "unknown"
+	}
+
 	var builder strings.Builder
-	builder.Grow(len(parsedURL.Host) + len(parsedURL.Path) + 50)
+	builder.Grow(len(scheme) + len(parsedURL.Host) + len(parsedURL.Path) + 50)
 
 	// 添加主机和路径信息
+	builder.WriteString(scheme)
+	builder.WriteString("://")
 	builder.WriteString(parsedURL.Host)
 	builder.WriteByte('|')
 	builder.WriteString(parsedURL.Path)

@@ -41,6 +41,7 @@ type CLIArgs struct {
 
 	Verbose     bool // 指纹匹配规则展示开关 (-v)
 	VeryVerbose bool // 指纹匹配内容展示开关 (-vv)
+	NoProbe     bool // 禁用主动目录指纹识别与404探测 (-np, --no-probe)
 
 	Headers []string // 自定义HTTP认证头部 (--header "Header-Name: Header-Value")
 
@@ -80,6 +81,8 @@ func ParseCLIArgs() *CLIArgs {
 		stats        = flag.Bool("stats", false, "启用实时扫描进度统计显示")
 		verbose      = flag.Bool("v", false, "显示指纹匹配规则内容 (默认关闭，可使用 -v 开启)")
 		veryVerbose  = flag.Bool("vv", false, "显示指纹匹配规则与内容片段 (默认关闭，可使用 -vv 开启)")
+		noProbe      = flag.Bool("np", false, "禁用主动目录指纹识别与404探测 (默认开启)")
+		noProbeLong  = flag.Bool("no-probe", false, "禁用主动目录指纹识别与404探测 (默认开启)")
 		noColor      = flag.Bool("no-color", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
 		networkCheck = flag.Bool("check-alive", false, "启用存活性检测 (默认关闭)")
 		jsonOutput   = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
@@ -122,6 +125,7 @@ func ParseCLIArgs() *CLIArgs {
 		Stats:        *stats,
 		Verbose:      *verbose,
 		VeryVerbose:  *veryVerbose,
+		NoProbe:      *noProbe || *noProbeLong,
 		NoColor:      *noColor,
 		NetworkCheck: *networkCheck,
 		JSONOutput:   *jsonOutput,
@@ -208,6 +212,7 @@ veo - 指纹识别/目录扫描
   --stats            显示实时统计信息
   -v                 显示指纹匹配规则内容
   -vv                显示指纹匹配规则及匹配片段
+  -np, --no-probe    禁用主动目录指纹识别与404探测
   --check-alive      启用存活性检测 (默认关闭)
   --no-color         禁用彩色输出
   --json             控制台输出 JSON

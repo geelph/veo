@@ -1324,18 +1324,17 @@ smartbi:
     - "contains(url,'vision/index.jsp')"
     - "contains(body, 'smartbi.gcf.gcfutil','QueryView_is_hybrid','writeCustomBgImg')"
 
-hfs:
+hfs文件服务器:
   dsl:
     - "contains(body, 'href=\"http://www.rejetto.com/hfs/')"
 
-cms:
+cms系统:
   dsl:
     - "contains(body, 'Powered by .*CMS')"
 
 big-ip:
   dsl:
     - "icon('/favicon.ico', '04d9541338e525258daf47cc844d59f3')"
-
 
 springboot:
   dsl:
@@ -1355,15 +1354,11 @@ springboot:
   dsl:
     - "contains(body, 'src=\"/static/img/skyeye-logo-big.png\">')"
 
-baidu-jiasule:
-  dsl:
-    - "contains(body, 'static.jiasule.com/static/js/http_error.js')"
-
 banggoo-adc:
   dsl:
     - "contains(body, '欢迎登录banggoo adc管理界面</div>')"
 
-barracuda-spam-firewall:
+梭子鱼防火墙:
   dsl:
     - "contains(body, 'http://www.barracudanetworks.com?a=bsf_product')"
 
@@ -1396,15 +1391,13 @@ eyou-mail-system:
     - "contains(body, 'var loginssl = document.form_login.login_ssl.value;')"
 
 帆软数据决策系统:
-  path: "/webroot/decision/login"
+  path: 
+    - "/webroot/decision/login"
+    - "/decision/login"
   dsl:
     - "contains(body, 'ReportServe\\?op=fs')"
     - "contains(header, 'webroot/decision')"
     - "contains(body, '/com/fr/web/resources')"
-
-gadspot-nc1000-l10:
-  dsl:
-    - "contains(body, '<nobr>video server')"
 
 gpon-home-gateway:
   dsl:
@@ -1469,18 +1462,6 @@ huawei-ism:
 huawei-security-device:
   dsl:
     - "contains(body, 'sweb-internal/plat/login/login_new.js')"
-
-huawei-server:
-  dsl:
-    - "contains(body, 'control/images/about.gif')"
-
-huawei-tecal-e6000:
-  dsl:
-    - "contains(body, \"<td class='td' id='pssystemstate'></td>\")"
-
-huawei-vct:
-  dsl:
-    - "contains(body, '<frame name=\"hidden_frame\" id=\"hidden_frame\" src=\"hidden_frame.html\" noresize=\"noresize')"
 
 huawei-wireless-lan:
   dsl:
