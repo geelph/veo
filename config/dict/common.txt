@@ -100,7 +100,6 @@
 /actuator/health/actuator/loggers
 /actuator/health/nacos
 /actuator/healthcheck
-/actuator/heapdump
 /actuator/heapdump/
 /actuator/heapdump/actuator/loggers/nacos
 /actuator/httptrace

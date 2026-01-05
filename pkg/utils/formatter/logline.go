@@ -84,15 +84,11 @@ func FormatLogLineWithURLSuffix(url string, urlSuffix string, statusCode int, ti
 }
 
 func formatURLWithSuffix(url string, suffix string) string {
-	url = strings.TrimSpace(url)
-	suffix = strings.TrimSpace(suffix)
-	if suffix == "" {
-		return FormatURL(url)
-	}
+	joined := joinURLWithSuffix(url, suffix)
 	if !shouldUseColors() {
-		return url + " " + suffix
+		return joined
 	}
-	return FormatFullURL(url) + " " + FormatFullURL(suffix)
+	return FormatFullURL(joined)
 }
 
 // SplitURLForLog 当URL过长时拆分为基础URL与路径/查询，保证单行展示
@@ -115,4 +111,24 @@ func SplitURLForLog(rawURL string, limit int) (string, string) {
 
 	baseURL := parsed.Scheme + "://" + parsed.Host + "/"
 	return baseURL, detail
+}
+
+func joinURLWithSuffix(baseURL string, suffix string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return baseURL
+	}
+
+	base := strings.TrimRight(baseURL, "/")
+	if suffix == "/" {
+		return base + "/"
+	}
+
+	if strings.HasPrefix(suffix, "?") || strings.HasPrefix(suffix, "#") {
+		return base + "/" + strings.TrimLeft(suffix, "/")
+	}
+
+	cleanSuffix := strings.TrimLeft(suffix, "/")
+	return base + "/" + cleanSuffix
 }

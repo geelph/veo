@@ -38,7 +38,8 @@ func (p *RequestProgress) Increment() {
 	if p == nil {
 		return
 	}
-	atomic.AddInt64(&p.completed, 1)
+	completed := atomic.AddInt64(&p.completed, 1)
+	p.ensureTotalAtLeast(completed)
 }
 
 func (p *RequestProgress) Stop() {
@@ -76,10 +77,23 @@ func (p *RequestProgress) print(completed int64) {
 		return
 	}
 	logger.WithOutputLock(func() {
-		fmt.Printf("\r\033[K%s [%d/%d]", p.label, completed, p.total)
+		total := atomic.LoadInt64(&p.total)
+		fmt.Printf("\r\033[K%s [%d/%d]", p.label, completed, total)
 	})
 }
 
 func (p *RequestProgress) clearLine() {
 	fmt.Print("\r\033[K")
+}
+
+func (p *RequestProgress) ensureTotalAtLeast(completed int64) {
+	for {
+		total := atomic.LoadInt64(&p.total)
+		if completed <= total {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&p.total, total, completed) {
+			return
+		}
+	}
 }

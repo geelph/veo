@@ -12,7 +12,7 @@ import (
 	requests "veo/pkg/utils/processor"
 )
 
-const dirscanTimeoutDropThreshold = 20
+const dirscanTimeoutDropThreshold = 100
 
 type timeoutDropper struct {
 	base      requests.StatsUpdater
@@ -179,7 +179,6 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		perTargetConcurrent = 1
 	}
 
-	batchMode := len(validTargets) > 1
 	logger.Debugf("目录扫描顺序扫描目标，单目标并发数: %d", perTargetConcurrent)
 
 	for _, target := range validTargets {
@@ -203,31 +202,25 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		})
 		engine.SetRequestProcessor(workerProcessor)
 
-		runCtx := ctx
-		var cancel context.CancelFunc
-		var wafCtx *wafCancelContext
-		if batchMode {
-			baseCtx, baseCancel := context.WithCancel(ctx)
-			cancel = baseCancel
-			wafCtx = &wafCancelContext{Context: baseCtx}
-			runCtx = wafCtx
+		baseCtx, baseCancel := context.WithCancel(ctx)
+		runCtx := &wafCancelContext{Context: baseCtx}
+		cancel := baseCancel
 
-			timeoutTracker := &timeoutDropper{
-				base:      workerProcessor.GetStatsUpdater(),
-				threshold: dirscanTimeoutDropThreshold,
-				onExceed: func() {
-					if ctx.Err() != nil {
-						return
-					}
-					wafCtx.setReason(dirscan.CancelReasonWAF)
-					logger.Warnf("目标疑似存在WAF，超时次数超过%d，已丢弃: %s", dirscanTimeoutDropThreshold, currentTarget)
-					if cancel != nil {
-						cancel()
-					}
-				},
-			}
-			workerProcessor.SetStatsUpdater(timeoutTracker)
+		timeoutTracker := &timeoutDropper{
+			base:      workerProcessor.GetStatsUpdater(),
+			threshold: dirscanTimeoutDropThreshold,
+			onExceed: func() {
+				if ctx.Err() != nil {
+					return
+				}
+				runCtx.setReason(dirscan.CancelReasonWAF)
+				logger.Warnf("%s 疑似存在WAF，超时已丢弃", currentTarget)
+				if cancel != nil {
+					cancel()
+				}
+			},
 		}
+		workerProcessor.SetStatsUpdater(timeoutTracker)
 
 		layerScanner := func(layerTargets []string, filter *dirscan.ResponseFilter, depth int) ([]interfaces.HTTPResponse, error) {
 			tempCollector := dirscan.NewRecursionCollector(layerTargets)
