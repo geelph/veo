@@ -584,6 +584,7 @@
 /controls/ueditor/net/controller.ashx?action=catchimage&encode=utf-8
 /editor/ueditor/1.4.3/net/controller.ashx?action=catchimage&encode=utf-8
 /editor/ueditor/net/controller.ashx?action=catchimage&encode=utf-8
+/controller.ashx?action=catchimage&encode=utf-8
 /ewebeditor.php
 /fckeditor/
 /fckeditor/editor/filemanager/connectors/asp/connector.asp
@@ -632,6 +633,8 @@
 /uploads/include/dialog/select_soft_post.php
 
 # 5. 管理后台 & 弱口令组件 & 未授权接口
+/h5/
+/h5
 /Uploadify.ashx
 /Uploadify.aspx
 /Uploadify.asp

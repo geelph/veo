@@ -228,6 +228,7 @@ veo - 指纹识别/目录扫描
   --shiro            在指纹识别/目录扫描请求头中添加 Cookie: rememberMe=1 (默认关闭)
   --no-color         禁用彩色输出
   --json             控制台输出 JSON
+  --proxy string     上游代理地址（HTTP/SOCKS5），例如 http://127.0.0.1:8080 或 socks5://127.0.0.1:1080
   -ua bool           是否启用随机User-Agent 池 (默认 false，使用 -ua=true 开启)
 
 性能调优:
@@ -251,6 +252,7 @@ veo - 指纹识别/目录扫描
 
 示例:
   %[1]s -u https://target.com -m finger,dirscan
+  %[1]s -u https://target.com --proxy http://127.0.0.1:8080
   %[1]s -l targets.txt -m finger,dirscan --stats
 %s
 `, prog, listenHelp, listenExample)
