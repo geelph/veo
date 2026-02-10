@@ -6,10 +6,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"veo/pkg/utils/httpclient"
-	"veo/pkg/utils/interfaces"
-	"veo/pkg/utils/logger"
-	sharedutils "veo/pkg/utils/shared"
+	"veo/pkg/httpclient"
+	"veo/pkg/logger"
+	sharedutils "veo/pkg/shared"
+	interfaces "veo/pkg/types"
 )
 
 // FilterConfig 过滤器配置（独立配置，不依赖外部config包）

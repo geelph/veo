@@ -1,16 +1,26 @@
 package fingerprint
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
-	"veo/pkg/utils/logger"
+	"veo/pkg/logger"
 
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	RemoteRulesURL   = "https://raw.githubusercontent.com/Nuclei-Template-Hub/VEO-Fingerprint/refs/heads/main/finger.yaml"
+	DefaultRulesFile = "finger.yaml"
 )
 
 // RuleManager 负责指纹规则的加载、解析和管理
@@ -48,7 +58,7 @@ func (rm *RuleManager) LoadRules(rulesPath string) error {
 		// 目录模式：扫描所有.yaml文件
 		logger.Debugf("检测到目录路径，扫描所有YAML文件: %s", rulesPath)
 
-		files, err := ioutil.ReadDir(rulesPath)
+		files, err := os.ReadDir(rulesPath)
 		if err != nil {
 			return fmt.Errorf("读取目录失败: %v", err)
 		}
@@ -126,7 +136,7 @@ func (rm *RuleManager) GetLoadedSummaryString() string {
 // loadSingleYAMLFile 加载单个YAML文件
 func (rm *RuleManager) loadSingleYAMLFile(filePath string) (int, error) {
 	// 读取YAML文件
-	data, err := ioutil.ReadFile(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("读取文件失败: %v", err)
 	}
@@ -248,4 +258,137 @@ func (rm *RuleManager) GetIconRules() []*FingerprintRule {
 		}
 	}
 	return iconRules
+}
+
+type Updater struct {
+	LocalPath string
+	RemoteURL string
+}
+
+func NewUpdater(localPath string) *Updater {
+	return &Updater{
+		LocalPath: localPath,
+		RemoteURL: RemoteRulesURL,
+	}
+}
+
+func (u *Updater) CheckForUpdates() (bool, string, string, error) {
+	localVersion, err := u.GetLocalVersion()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, "0.0", "unknown", nil
+		}
+		return false, "", "", fmt.Errorf("读取本地指纹库失败: %v", err)
+	}
+
+	remoteVersion, err := u.GetRemoteVersion()
+	if err != nil {
+		return false, localVersion, "", fmt.Errorf("检查云端版本失败: %v", err)
+	}
+
+	return u.compareVersions(localVersion, remoteVersion), localVersion, remoteVersion, nil
+}
+
+func (u *Updater) UpdateRules() error {
+	logger.Infof("正在从云端下载最新指纹库: %s", u.RemoteURL)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(u.RemoteURL)
+	if err != nil {
+		return fmt.Errorf("下载失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("下载失败，HTTP状态码: %d", resp.StatusCode)
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应内容失败: %v", err)
+	}
+
+	version := u.extractVersion(content)
+	if version == "" {
+		return fmt.Errorf("下载的内容无效或未包含版本信息")
+	}
+
+	dir := filepath.Dir(u.LocalPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("创建目录失败: %v", err)
+	}
+
+	if err := os.WriteFile(u.LocalPath, content, 0644); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
+	}
+
+	logger.Infof("指纹库已更新成功! 版本: %s", version)
+	return nil
+}
+
+func (u *Updater) GetLocalVersion() (string, error) {
+	content, err := os.ReadFile(u.LocalPath)
+	if err != nil {
+		return "", err
+	}
+	return u.extractVersion(content), nil
+}
+
+func (u *Updater) GetRemoteVersion() (string, error) {
+	client := &http.Client{Timeout: 1 * time.Second}
+
+	req, err := http.NewRequest("GET", u.RemoteURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Range", "bytes=0-1024")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 && resp.StatusCode != 206 {
+		return "", fmt.Errorf("HTTP请求失败: %d", resp.StatusCode)
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	version := u.extractVersion(content)
+	if version == "" {
+		return "", fmt.Errorf("未找到版本信息")
+	}
+	return version, nil
+}
+
+func (u *Updater) extractVersion(content []byte) string {
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "# version:") {
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return ""
+}
+
+func (u *Updater) compareVersions(v1, v2 string) bool {
+	if v1 == "" || v2 == "" {
+		return true
+	}
+
+	f1, err1 := strconv.ParseFloat(v1, 64)
+	f2, err2 := strconv.ParseFloat(v2, 64)
+	if err1 == nil && err2 == nil {
+		return f1 < f2
+	}
+
+	return v1 != v2
 }

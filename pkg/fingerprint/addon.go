@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"veo/pkg/dirscan"
-	"veo/pkg/utils/httpclient"
-	"veo/pkg/utils/logger"
-	"veo/pkg/utils/shared"
+	"veo/pkg/httpclient"
+	"veo/pkg/logger"
+	"veo/pkg/shared"
 	"veo/proxy"
 )
 
@@ -174,6 +174,7 @@ func (fa *FingerprintAddon) convertToHTTPResponse(f *proxy.Flow) *HTTPResponse {
 		ContentLength:   int64(len(body)),
 		Server:          server,
 		Title:           title,
+		Timestamp:       time.Now(),
 	}
 }
 

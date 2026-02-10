@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"veo/pkg/utils/interfaces"
+	interfaces "veo/pkg/types"
 )
 
 // Mock LayerScanner

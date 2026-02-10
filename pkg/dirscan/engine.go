@@ -2,18 +2,68 @@ package dirscan
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"veo/pkg/utils/interfaces"
-	"veo/pkg/utils/logger"
-	requests "veo/pkg/utils/processor"
-	"veo/pkg/utils/progress"
+	"veo/pkg/logger"
+	requests "veo/pkg/processor"
+	"veo/pkg/shared"
+	scanstats "veo/pkg/stats"
+	interfaces "veo/pkg/types"
 )
 
-// 引擎实现
+var ErrNoValidHTTPResponse = errors.New("No Valid HTTP response received")
+
+type ScanResult struct {
+	Target        string                     `json:"target"`
+	CollectedURLs []string                   `json:"collected_urls"`
+	ScanURLs      []string                   `json:"scan_urls"`
+	Responses     []*interfaces.HTTPResponse `json:"responses"`
+	FilterResult  *interfaces.FilterResult   `json:"filter_result"`
+	StartTime     time.Time                  `json:"start_time"`
+	EndTime       time.Time                  `json:"end_time"`
+	Duration      time.Duration              `json:"duration"`
+}
+
+type EngineConfig struct {
+	MaxConcurrency   int           `yaml:"max_concurrency"`
+	RequestTimeout   time.Duration `yaml:"request_timeout"`
+	EnableCollection bool          `yaml:"enable_collection"`
+	EnableFiltering  bool          `yaml:"enable_filtering"`
+	ProxyURL         string        `yaml:"proxy_url"`
+}
+
+type Statistics struct {
+	TotalCollected  int64     `json:"total_collected"`
+	TotalGenerated  int64     `json:"total_generated"`
+	TotalRequests   int64     `json:"total_requests"`
+	SuccessRequests int64     `json:"success_requests"`
+	FilteredResults int64     `json:"filtered_results"`
+	ValidResults    int64     `json:"valid_results"`
+	StartTime       time.Time `json:"start_time"`
+	LastScanTime    time.Time `json:"last_scan_time"`
+	TotalScans      int64     `json:"total_scans"`
+}
+
+type Engine struct {
+	config           *EngineConfig
+	stats            *Statistics
+	mu               sync.RWMutex
+	requestProcessor *requests.RequestProcessor
+}
+
+func getDefaultConfig() *EngineConfig {
+	return &EngineConfig{
+		MaxConcurrency:   20,
+		RequestTimeout:   30 * time.Second,
+		EnableCollection: true,
+		EnableFiltering:  true,
+	}
+}
 
 // NewEngine 创建新的目录扫描引擎
 func NewEngine(config *EngineConfig) *Engine {
@@ -91,7 +141,7 @@ func (e *Engine) PerformScanWithFilter(ctx context.Context, collectorInstance in
 	// 3. 执行HTTP请求（带实时过滤回调）
 	scanLabel := buildScanLabel(collectorInstance)
 	totalRequests := int64(len(scanURLs))
-	var progressTracker *progress.RequestProgress
+	var progressTracker *scanstats.RequestProgress
 	if scanLabel != "" && totalRequests > 0 {
 		showProgress := true
 		if processor := e.getOrCreateRequestProcessor(); processor != nil {
@@ -102,7 +152,7 @@ func (e *Engine) PerformScanWithFilter(ctx context.Context, collectorInstance in
 			}
 		}
 		if showProgress {
-			progressTracker = progress.NewRequestProgress(scanLabel, totalRequests, true)
+			progressTracker = scanstats.NewRequestProgress(scanLabel, totalRequests, true)
 			defer progressTracker.Stop()
 		}
 	}
@@ -207,7 +257,7 @@ func (e *Engine) generateScanURLs(collectorInstance interfaces.URLCollectorInter
 }
 
 // performHTTPRequestsWithCallback 执行HTTP请求（支持回调）
-func (e *Engine) performHTTPRequestsWithCallback(ctx context.Context, scanURLs []string, progress *progress.RequestProgress, callback func(*interfaces.HTTPResponse)) (int64, error) {
+func (e *Engine) performHTTPRequestsWithCallback(ctx context.Context, scanURLs []string, progress *scanstats.RequestProgress, callback func(*interfaces.HTTPResponse)) (int64, error) {
 	logger.Debug("开始执行HTTP扫描 (Callback模式)")
 
 	// 获取或创建请求处理器
@@ -327,4 +377,180 @@ func (e *Engine) extractTarget(responses []*interfaces.HTTPResponse) string {
 		return firstURL[:50] + "..."
 	}
 	return firstURL
+}
+
+type cancelReasonKey struct{}
+
+var CancelReasonKey = cancelReasonKey{}
+
+const CancelReasonWAF = "waf-timeout"
+
+type LayerScanner func(targets []string, filter *ResponseFilter, depth int) ([]interfaces.HTTPResponse, error)
+
+func RunRecursiveScan(
+	ctx context.Context,
+	initialTargets []string,
+	maxDepth int,
+	layerScanner LayerScanner,
+	sharedFilter *ResponseFilter,
+) ([]interfaces.HTTPResponse, error) {
+	var allResults []interfaces.HTTPResponse
+
+	currentTargets := initialTargets
+	alreadyScanned := make(map[string]bool)
+
+	for _, t := range initialTargets {
+		alreadyScanned[t] = true
+		if !strings.HasSuffix(t, "/") {
+			alreadyScanned[t+"/"] = true
+		}
+	}
+
+	for d := 0; d <= maxDepth; d++ {
+		select {
+		case <-ctx.Done():
+			if reason, ok := ctx.Value(CancelReasonKey).(string); ok && reason == CancelReasonWAF {
+				return allResults, nil
+			}
+			if maxDepth > 0 {
+				logger.Warn("递归扫描被取消")
+			} else {
+				logger.Warn("扫描被取消")
+			}
+			return allResults, nil
+		default:
+		}
+
+		if len(currentTargets) == 0 {
+			break
+		}
+
+		if d > 0 {
+			logger.Infof("正在进行第 %d 层递归目录扫描，目标数量: %d", d, len(currentTargets))
+			if len(currentTargets) <= 5 {
+				for _, target := range currentTargets {
+					logger.Debugf("  └─ 递归目标: %s", target)
+				}
+			}
+		}
+
+		var currentFilter *ResponseFilter
+		if d > 0 {
+			currentFilter = sharedFilter
+		} else if sharedFilter != nil {
+			currentFilter = sharedFilter
+		}
+
+		results, err := layerScanner(currentTargets, currentFilter, d)
+		if err != nil {
+			if errors.Is(err, ErrNoValidHTTPResponse) {
+				target := ""
+				if len(currentTargets) == 1 {
+					target = currentTargets[0]
+				}
+				if target != "" {
+					logger.Errorf("Scanning For %s Error，No Valid HTTP response received", target)
+				} else {
+					logger.Errorf("Scanning Error，No Valid HTTP response received")
+				}
+			} else {
+				logger.Errorf("目录扫描出错 (Depth %d): %v", d, err)
+			}
+		}
+
+		if len(results) > 0 {
+			allResults = append(allResults, results...)
+		}
+
+		if d < maxDepth {
+			newTargets := ExtractNextLevelTargets(results, alreadyScanned)
+			var finalTargets []string
+			for _, nt := range newTargets {
+				if !alreadyScanned[nt] {
+					alreadyScanned[nt] = true
+					finalTargets = append(finalTargets, nt)
+				}
+			}
+			currentTargets = finalTargets
+		}
+	}
+
+	return allResults, nil
+}
+
+func ExtractNextLevelTargets(results []interfaces.HTTPResponse, alreadyScanned map[string]bool) []string {
+	var newTargets []string
+	thisRoundTargets := make(map[string]struct{})
+	fileChecker := shared.NewFileExtensionChecker()
+	pathChecker := shared.NewPathChecker()
+
+	for _, resp := range results {
+		if resp.StatusCode != 200 && resp.StatusCode != 403 {
+			continue
+		}
+
+		targetURL := resp.URL
+		if targetURL == "" {
+			continue
+		}
+
+		if fileChecker.IsStaticFile(targetURL) {
+			continue
+		}
+
+		if pathChecker.IsStaticPath(targetURL) {
+			logger.Debugf("跳过黑名单目录: %s", targetURL)
+			continue
+		}
+
+		if !strings.HasSuffix(targetURL, "/") {
+			targetURL += "/"
+		}
+
+		if alreadyScanned[targetURL] {
+			continue
+		}
+		if _, ok := thisRoundTargets[targetURL]; ok {
+			continue
+		}
+
+		thisRoundTargets[targetURL] = struct{}{}
+		newTargets = append(newTargets, targetURL)
+	}
+
+	logger.Debugf("从 %d 个结果中提取到 %d 个新递归目标", len(results), len(newTargets))
+	if len(newTargets) > 0 {
+		count := 5
+		if len(newTargets) < count {
+			count = len(newTargets)
+		}
+		logger.Debugf("递归目标示例 (Top %d):", count)
+		for i := 0; i < count; i++ {
+			logger.Debugf("  -> %s", newTargets[i])
+		}
+	}
+	return newTargets
+}
+
+type RecursionCollector struct {
+	urls map[string]int
+}
+
+func NewRecursionCollector(targets []string) *RecursionCollector {
+	urls := make(map[string]int, len(targets))
+	for _, t := range targets {
+		if t == "" {
+			continue
+		}
+		urls[t] = 1
+	}
+	return &RecursionCollector{urls: urls}
+}
+
+func (rc *RecursionCollector) GetURLMap() map[string]int {
+	return rc.urls
+}
+
+func (rc *RecursionCollector) GetURLCount() int {
+	return len(rc.urls)
 }

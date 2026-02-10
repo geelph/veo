@@ -1,14 +1,17 @@
 package dirscan
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
-	"veo/pkg/utils/interfaces"
-	"veo/pkg/utils/logger"
-	"veo/pkg/utils/shared"
+	"veo/pkg/logger"
+	"veo/pkg/shared"
+	interfaces "veo/pkg/types"
 )
 
 // 模板变量定义
@@ -409,4 +412,359 @@ func (ug *URLGenerator) convertURLMapToList(urlMap map[string]int) []string {
 		urls = append(urls, url)
 	}
 	return urls
+}
+
+const defaultWordlistPath = "config/dict/common.txt"
+
+var (
+	globalDictCache *DictionaryCache
+	cacheOnce       sync.Once
+	cacheMutex      sync.Mutex
+
+	wordlistMu      sync.RWMutex
+	customWordlists []string
+)
+
+type DictionaryCache struct {
+	entries []string
+	loaded  bool
+	mu      sync.RWMutex
+}
+
+type DictionaryManager struct{}
+
+func getCache() *DictionaryCache {
+	cacheOnce.Do(func() {
+		globalDictCache = &DictionaryCache{
+			entries: make([]string, 0),
+		}
+	})
+	return globalDictCache
+}
+
+func getConfiguredWordlists() []string {
+	wordlistMu.RLock()
+	paths := append([]string(nil), customWordlists...)
+	wordlistMu.RUnlock()
+
+	if len(paths) == 0 {
+		return []string{defaultWordlistPath}
+	}
+
+	sanitized := make([]string, 0, len(paths))
+	seen := make(map[string]struct{})
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			logger.Warnf("字典文件不可用: %s (%v)", path, err)
+			continue
+		}
+		seen[path] = struct{}{}
+		sanitized = append(sanitized, path)
+	}
+
+	if len(sanitized) == 0 {
+		return []string{defaultWordlistPath}
+	}
+
+	return sanitized
+}
+
+func SetWordlistPaths(paths []string) {
+	wordlistMu.Lock()
+	customWordlists = append([]string(nil), paths...)
+	wordlistMu.Unlock()
+
+	cache := getCache()
+	cache.mu.Lock()
+	cache.entries = nil
+	cache.loaded = false
+	cache.mu.Unlock()
+}
+
+func (dm *DictionaryManager) LoadDictionaries() error {
+	cache := getCache()
+	if !cache.isLoaded() {
+		cacheMutex.Lock()
+		if !cache.isLoaded() {
+			dm.loadToCache()
+		}
+		cacheMutex.Unlock()
+	}
+
+	return nil
+}
+
+func (dm *DictionaryManager) loadToCache() {
+	cache := getCache()
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	wordlists := getConfiguredWordlists()
+	entries := make([]string, 0)
+	total := 0
+	var warnings []string
+
+	logger.Debugf("开始加载字典文件，共 %d 个文件", len(wordlists))
+
+	for _, path := range wordlists {
+		dictEntries, lineCount, commentCount, err := readWordlist(path)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
+			continue
+		}
+
+		entries = append(entries, dictEntries...)
+		total += len(dictEntries)
+		logger.Debugf("字典文件加载完成: %s, 总行数 %d, 注释行 %d, 有效条目 %d",
+			path, lineCount, commentCount, len(dictEntries))
+	}
+
+	if len(entries) == 0 {
+		logger.Warnf("未能加载任何自定义字典，尝试使用默认字典: %s", defaultWordlistPath)
+		fallbackEntries, lineCount, commentCount, err := readWordlist(defaultWordlistPath)
+		if err == nil {
+			entries = append(entries, fallbackEntries...)
+			total = len(fallbackEntries)
+			logger.Debugf("默认字典加载完成: %s, 总行数 %d, 注释行 %d, 有效条目 %d",
+				defaultWordlistPath, lineCount, commentCount, len(fallbackEntries))
+		} else {
+			logger.Warnf("默认字典加载失败: %v", err)
+		}
+	}
+
+	cache.entries = entries
+	cache.loaded = true
+
+	logger.Debugf("字典加载完成，成功加载 %d 个条目", total)
+	if len(warnings) > 0 {
+		logger.Warnf("字典加载警告: %s", strings.Join(warnings, "; "))
+	}
+}
+
+func readWordlist(path string) ([]string, int, int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("打开字典文件失败: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	entries := make([]string, 0, 1000)
+	lineCount := 0
+	commentCount := 0
+
+	for scanner.Scan() {
+		lineCount++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			if strings.HasPrefix(line, "#") {
+				commentCount++
+			}
+			continue
+		}
+		entries = append(entries, line)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, lineCount, commentCount, fmt.Errorf("读取字典文件失败: %w", err)
+	}
+
+	return entries, lineCount, commentCount, nil
+}
+
+func (cache *DictionaryCache) isLoaded() bool {
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	return cache.loaded
+}
+
+func (dm *DictionaryManager) GetCommonDictionary() []string {
+	_ = dm.LoadDictionaries()
+	cache := getCache()
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	return append([]string(nil), cache.entries...)
+}
+
+func GetCommonDictionarySize() int {
+	dm := &DictionaryManager{}
+	_ = dm.LoadDictionaries()
+	cache := getCache()
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	return len(cache.entries)
+}
+
+func (dm *DictionaryManager) Reset() {
+	cache := getCache()
+	cache.mu.Lock()
+	cache.entries = nil
+	cache.loaded = false
+	cache.mu.Unlock()
+
+	logger.Debug("字典管理器已重置")
+}
+
+type URLCleaner struct {
+	invalidParams     map[string]bool
+	authParams        map[string]bool
+	timestampPatterns []string
+	timestampRegex    []*regexp.Regexp
+}
+
+func NewURLCleaner() *URLCleaner {
+	cleaner := &URLCleaner{
+		invalidParams: map[string]bool{
+			"_t": true, "time": true, "timestamp": true, "_": true,
+			"cachebust": true, "nocache": true, "v": true, "version": true,
+			"rand": true, "random": true, "_random": true, "cb": true, "callback": true,
+		},
+		authParams: map[string]bool{
+			"token": true, "auth": true, "authorization": true, "bearer": true,
+			"jwt": true, "access_token": true, "refresh_token": true,
+			"api_key": true, "apikey": true, "secret": true,
+			"session": true, "sessionid": true, "sid": true,
+			"jsessionid": true, "phpsessid": true,
+			"userid": true, "user_id": true, "uid": true, "username": true,
+			"account": true, "email": true, "role": true, "group": true,
+			"tenant": true, "tenant_id": true,
+			"permission": true, "scope": true, "access": true, "privilege": true,
+		},
+		timestampPatterns: []string{
+			`^\d{10}$`, `^\d{13}$`, `^\d{16}$`, `^[0-9]{8,}$`,
+		},
+	}
+	cleaner.timestampRegex = make([]*regexp.Regexp, 0, len(cleaner.timestampPatterns))
+	for _, pattern := range cleaner.timestampPatterns {
+		cleaner.timestampRegex = append(cleaner.timestampRegex, regexp.MustCompile(pattern))
+	}
+	return cleaner
+}
+
+func (c *URLCleaner) IsStaticResource(rawURL string) bool {
+	lowerURL := strings.ToLower(rawURL)
+
+	pathChecker := shared.NewPathChecker()
+	if pathChecker.IsStaticPath(rawURL) {
+		logger.Debugf("匹配静态目录，过滤: %s", rawURL)
+		return true
+	}
+
+	checker := shared.NewFileExtensionChecker()
+	if checker.IsStaticFile(lowerURL) {
+		logger.Debugf("匹配静态扩展名，过滤: %s", rawURL)
+		return true
+	}
+
+	return false
+}
+
+func (c *URLCleaner) CleanURLParams(rawURL string) string {
+	valid, fixedURL := c.validateAndFixURL(rawURL)
+	if !valid {
+		return ""
+	}
+
+	parsedURL, err := url.Parse(fixedURL)
+	if err != nil {
+		return ""
+	}
+
+	pathCleaned := c.cleanPathID(parsedURL)
+	if parsedURL.RawQuery == "" && !pathCleaned {
+		return fixedURL
+	}
+
+	validParams := url.Values{}
+	for key, values := range parsedURL.Query() {
+		if c.isValidParam(key, values) {
+			validParams[key] = values
+		}
+	}
+
+	if len(validParams) == 0 {
+		parsedURL.RawQuery = ""
+	} else {
+		parsedURL.RawQuery = validParams.Encode()
+	}
+
+	return parsedURL.String()
+}
+
+func (c *URLCleaner) validateAndFixURL(rawURL string) (bool, string) {
+	if rawURL == "" {
+		return false, ""
+	}
+
+	fixedURL := rawURL
+	if strings.HasPrefix(rawURL, "//") {
+		hostAndPath := rawURL[2:]
+		if hostAndPath == "" {
+			return false, ""
+		}
+
+		if strings.Contains(hostAndPath, ":443") {
+			hostAndPath = strings.Replace(hostAndPath, ":443", "", 1)
+			fixedURL = "https://" + hostAndPath
+		} else {
+			fixedURL = "http://" + hostAndPath
+		}
+	}
+
+	lower := strings.ToLower(fixedURL)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return false, ""
+	}
+
+	return true, fixedURL
+}
+
+func (c *URLCleaner) cleanPathID(u *url.URL) bool {
+	path := strings.TrimRight(u.Path, "/")
+	idx := strings.LastIndex(path, "/")
+	if idx == -1 {
+		return false
+	}
+
+	segment := path[idx+1:]
+	isNumeric := segment != ""
+	for _, r := range segment {
+		if r < '0' || r > '9' {
+			isNumeric = false
+			break
+		}
+	}
+
+	if isNumeric {
+		u.Path = path[:idx]
+		return true
+	}
+	return false
+}
+
+func (c *URLCleaner) isValidParam(key string, values []string) bool {
+	lowerKey := strings.ToLower(key)
+	if c.invalidParams[lowerKey] {
+		return false
+	}
+	if c.authParams[lowerKey] {
+		return true
+	}
+
+	for _, v := range values {
+		for _, p := range c.timestampRegex {
+			if p.MatchString(v) {
+				return false
+			}
+		}
+	}
+	return true
 }

@@ -3014,3 +3014,8 @@ dify:
   dsl:
   - "contains(body, 'data-marketplace-url-prefix','content=\"Dify\"')"
   - "icon('/icon-192x192.png', '682948c646ca9e6665a1c2cc9334662d')"
+
+积木报表:
+  tags: red,rce,jmreport
+  dsl:
+  - "contains(body, 'jmreport/desreport','desreport','jmreport')"

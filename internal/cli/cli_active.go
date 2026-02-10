@@ -3,51 +3,20 @@
 package cli
 
 import (
-	"fmt"
-
-	"veo/internal/core/config"
-	"veo/pkg/utils/logger"
+	"veo/pkg/logger"
 )
+
+const passiveBuild = false
 
 // Execute 执行CLI命令（默认构建：仅主动扫描）
 func Execute() {
-	// 优先初始化配置系统
-	if err := config.InitConfig(); err != nil {
-		// 如果配置加载失败，使用默认配置
-		fmt.Printf("配置文件加载失败，使用默认配置: %v\n", err)
-	}
-
-	// 初始化日志系统
-	loggerConfig := &logger.LogConfig{
-		Level:       "info",
-		ColorOutput: true,
-	}
-	if err := logger.InitializeLogger(loggerConfig); err != nil {
-		// 如果初始化失败，使用默认配置
-		logger.InitializeLogger(nil)
-	}
-	logger.Debug("日志系统初始化完成")
-
-	// 解析命令行参数
-	args := ParseCLIArgs()
-
-	// 应用CLI参数到配置（包括--debug标志）
-	applyArgsToConfig(args)
-
-	// 处理指纹库更新逻辑 (前置处理，如果是更新操作则直接退出)
-	handleRuleUpdates(args)
-
-	if args.CheckSimilarOnly {
-		if err := runCheckSimilarOnlyMode(args); err != nil {
-			logger.Fatalf("相似度检查失败: %v", err)
-		}
+	args := bootstrapCLI()
+	if handlePreScanShortCircuit(args) {
 		return
 	}
 
-	// 提前显示启动信息，确保banner在所有日志输出之前显示
 	displayStartupInfo(args)
 
-	// 主动扫描模式
 	if err := runActiveScanMode(args); err != nil {
 		logger.Fatalf("主动扫描失败: %v", err)
 	}

@@ -25,6 +25,7 @@ type HTTPResponse struct {
 	Duration        int64               `json:"duration"`
 	Depth           int                 `json:"depth"`
 	ResponseBody    string              `json:"response_body"` // Used for reporting
+	Timestamp       time.Time           `json:"-"`
 	Fingerprints    []FingerprintMatch  `json:"fingerprints,omitempty"`
 }
 
@@ -60,4 +61,15 @@ type PageHash struct {
 	Title         string `json:"title"`
 	ContentLength int64  `json:"content_length"`
 	ContentType   string `json:"content_type"`
+}
+
+// URLCollectorInterface URL采集器接口
+type URLCollectorInterface interface {
+	GetURLMap() map[string]int
+	GetURLCount() int
+}
+
+// FingerprintAnalyzer 指纹分析器接口（用于跨模块调用，避免反射）
+type FingerprintAnalyzer interface {
+	AnalyzeResponseWithClientSilent(response *HTTPResponse, httpClient interface{}) []*FingerprintMatch
 }
