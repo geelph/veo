@@ -216,6 +216,7 @@
 /druid/*/actuator/swagger/codes
 /dump
 /dump.log
+/dump.rdb
 /dump.sql
 /env
 /env/
@@ -635,6 +636,8 @@
 /uploads/include/dialog/select_soft_post.php
 
 # 5. 管理后台 & 弱口令组件 & 未授权接口
+/web/
+/cloud/
 /h5/
 /h5
 /Uploadify.ashx
@@ -646,6 +649,7 @@
 /WEB-INF/config/dashboard-statistics.xml
 /WEB-INF/spring-config/management-config.xml
 /admin
+/admin/login.jsp
 /admin-api/
 /admin-console/login.seam
 /admin.asp
@@ -1185,7 +1189,12 @@
 /Server
 /Server.php
 /Server/
+/ss-admin/
 /Service.asmx
+/king-grid/index.jsp
+/king-grid/
+/king-grid/index.php
+/king-grid/index.jspx
 /Service/
 /Setting.xml
 /Shoppingws.asmx

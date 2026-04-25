@@ -186,14 +186,6 @@ SQL语法报错:
   dsl:
   - regex(body, '^[^:]+:[^:]*:[0-9]*:*[0-9]*:[0-9]*:[0-9]*:::')
 
-asp-webshell:
-  dsl:
-  - regex(body, '(?i)wscript.shell')
-  - regex(body, '(?i)ExecuteStatement')
-  - regex(body, '(?i)cmd.exe')
-  - regex(body, '(?i)mmshell')
-  - regex(body, '(?i)GetCmd')
-
 阿里云:
   dsl:
   - regex(body, '(LTAI[A-Za-z0-9]{12,20})')

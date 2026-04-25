@@ -106,23 +106,12 @@ addon:
         - "/stylesheet/"
   
       extensions:
-        - ".log"
-        - ".php"
-        - ".html"
-        - ".htm"
-        - ".jsp"
-        - ".asp"
-        - ".aspx"
-        - ".ashx"
-        - ".jspx"
-        - ".json"
         - ".css"
         - ".scss"
         - ".sass"
         - ".less"
         - ".min.css"
         - ".js"
-        - ".jsx"
         - ".ts"
         - ".tsx"
         - ".coffee"
@@ -159,7 +148,6 @@ addon:
         - ".manifest"
         - ".cache"
         - ".swf"
-        - ".txt"
 
   request:
     depth: 1
