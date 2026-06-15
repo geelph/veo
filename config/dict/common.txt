@@ -1354,6 +1354,7 @@
 /api/v1/docs
 /api/v1/getUserInfo
 /api/v1/login
+/version
 /api/v1/settings
 /api/v1/user/list
 /api/v1/userlist

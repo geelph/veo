@@ -1,8 +1,13 @@
 package redirect
 
-import "testing"
+import (
+	"testing"
+
+	"veo/pkg/types"
+)
 
 type fakeFetcherFull struct {
+	calls     int
 	responses map[string]struct {
 		body       string
 		statusCode int
@@ -11,10 +16,16 @@ type fakeFetcherFull struct {
 }
 
 func (f *fakeFetcherFull) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
+	f.calls++
 	if r, ok := f.responses[rawURL]; ok {
 		return r.body, r.statusCode, r.headers, nil
 	}
 	return "", 404, map[string][]string{"Content-Type": {"text/plain"}}, nil
+}
+
+func (f *fakeFetcherFull) MakeRequest(rawURL string) (string, int, error) {
+	body, statusCode, _, err := f.MakeRequestFull(rawURL)
+	return body, statusCode, err
 }
 
 func TestDetectClientRedirectURL_MetaRefresh(t *testing.T) {
@@ -144,5 +155,29 @@ func TestExecute_OriginRedirectStopsEarly(t *testing.T) {
 	}
 	if resp.URL != "http://example.com/login?origin=abc" {
 		t.Fatalf("expected stop on first origin redirect, got %q", resp.URL)
+	}
+}
+
+func TestFollowClientRedirect_SameURLSkipped(t *testing.T) {
+	fetcher := &fakeFetcherFull{responses: map[string]struct {
+		body       string
+		statusCode int
+		headers    map[string][]string
+	}{}}
+	resp := &types.HTTPResponse{
+		URL:         "http://example.com/html/ie.html",
+		ContentType: "text/html",
+		Body:        `<html><script>location.href = "/html/ie.html";</script></html>`,
+	}
+
+	redirected, err := FollowClientRedirect(resp, fetcher)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if redirected != nil {
+		t.Fatalf("expected same-url redirect to be skipped, got %#v", redirected)
+	}
+	if fetcher.calls != 0 {
+		t.Fatalf("expected no fetch for same-url redirect, got %d", fetcher.calls)
 	}
 }

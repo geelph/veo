@@ -240,27 +240,27 @@ func (e *Engine) GetLoadedSummaryString() string {
 
 // AnalyzeResponseWithClient 分析响应包并进行指纹识别（增强版，支持icon()函数主动探测）
 func (e *Engine) AnalyzeResponseWithClient(response *HTTPResponse, httpClient httpclient.HTTPClientInterface) []*FingerprintMatch {
-	return e.analyzeResponseInternal(response, httpClient, false, true)
+	return e.analyzeResponseInternal(response, httpClient, false, true, true)
 }
 
 // AnalyzeResponsePassive 分析响应包并进行指纹识别（仅被动规则匹配）
 func (e *Engine) AnalyzeResponsePassive(response *HTTPResponse) []*FingerprintMatch {
-	return e.analyzeResponseInternal(response, nil, false, true)
+	return e.analyzeResponseInternal(response, nil, false, true, true)
 }
 
 // AnalyzeResponseWithClientNoNoMatch 分析响应包并进行指纹识别（不输出无匹配）
 func (e *Engine) AnalyzeResponseWithClientNoNoMatch(response *HTTPResponse, httpClient httpclient.HTTPClientInterface) []*FingerprintMatch {
-	return e.analyzeResponseInternal(response, httpClient, false, false)
+	return e.analyzeResponseInternal(response, httpClient, false, false, true)
 }
 
 // AnalyzeResponseWithClientSilent 分析响应包并进行指纹识别（静默版本，不自动输出结果）
 func (e *Engine) AnalyzeResponseWithClientSilent(response *HTTPResponse, httpClient interface{}) []*FingerprintMatch {
 	client, _ := httpClient.(httpclient.HTTPClientInterface)
-	return e.analyzeResponseInternal(response, client, true, false)
+	return e.analyzeResponseInternal(response, client, true, false, true)
 }
 
 // analyzeResponseInternal 内部核心分析逻辑
-func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient httpclient.HTTPClientInterface, silent bool, emitNoMatch bool) []*FingerprintMatch {
+func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient httpclient.HTTPClientInterface, silent bool, emitNoMatch bool, followClientRedirect bool) []*FingerprintMatch {
 	// 检查是否应该过滤此响应
 	if e.config.EnableFiltering && e.shouldFilterResponse(response) {
 		atomic.AddInt64(&e.stats.FilteredRequests, 1)
@@ -325,10 +325,10 @@ func (e *Engine) analyzeResponseInternal(response *HTTPResponse, httpClient http
 	}
 
 	// 客户端重定向处理
-	if httpClient != nil {
+	if followClientRedirect && httpClient != nil {
 		if fetcher, ok := httpClient.(redirect.HTTPFetcher); ok {
 			if redirected, err := redirect.FollowClientRedirect(response, fetcher); err == nil && redirected != nil {
-				rMatches := e.analyzeResponseInternal(redirected, httpClient, true, emitNoMatch)
+				rMatches := e.analyzeResponseInternal(redirected, httpClient, true, emitNoMatch, false)
 
 				if len(rMatches) > 0 {
 					if !silent && e.config.OutputFormatter != nil {
@@ -615,9 +615,7 @@ func (e *Engine) TriggerActiveProbing(baseURL string, httpClient httpclient.HTTP
 		return
 	}
 	go func() {
-		if timeout <= 0 {
-			timeout = 5 * time.Minute
-		}
+		timeout = shared.NormalizeRequestTimeout(timeout)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
@@ -629,6 +627,11 @@ func (e *Engine) TriggerActiveProbing(baseURL string, httpClient httpclient.HTTP
 // ExecuteActiveProbing 执行主动指纹探测（同步返回结果）
 func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpClient httpclient.HTTPClientInterface) ([]*ProbeResult, error) {
 	logger.Debugf("开始主动探测: %s", baseURL)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	pathRules := e.ruleManager.GetPathRules()
 	headerOnlyRules := e.ruleManager.GetHeaderRules()
@@ -698,6 +701,8 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 	close(taskChan)
 
 	var wg sync.WaitGroup
+	stopLoss := shared.NewTimeoutStopLoss()
+	var cancelOnce sync.Once
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
@@ -711,9 +716,22 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 						return
 					}
 
+					if err := contextDoneErr(ctx); err != nil {
+						return
+					}
 					body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, tk.url, tk.headers)
 					if err != nil {
+						if stopLoss.Record(err) {
+							cancelOnce.Do(func() {
+								logger.Infof("超时丢弃：%s", baseURL)
+								cancel()
+							})
+						}
 						continue
+					}
+					stopLoss.Record(nil)
+					if err := contextDoneErr(ctx); err != nil {
+						return
 					}
 
 					resp := &HTTPResponse{
@@ -779,6 +797,9 @@ func buildProbeTaskKey(probeURL string, headers map[string]string) string {
 // ExecuteIconProbing 执行Icon主动探测（同步返回结果）
 func (e *Engine) ExecuteIconProbing(ctx context.Context, baseURL string, httpClient httpclient.HTTPClientInterface) (*ProbeResult, error) {
 	logger.Debugf("开始Icon主动探测: %s", baseURL)
+	if err := contextDoneErr(ctx); err != nil {
+		return nil, err
+	}
 
 	iconRules := e.ruleManager.GetIconRules()
 	if len(iconRules) == 0 {
@@ -819,6 +840,9 @@ func (e *Engine) ExecuteIconProbing(ctx context.Context, baseURL string, httpCli
 // Execute404Probing 执行404页面探测（同步返回结果）
 func (e *Engine) Execute404Probing(ctx context.Context, baseURL string, httpClient httpclient.HTTPClientInterface) (*ProbeResult, error) {
 	logger.Debugf("开始404页面指纹识别: %s", baseURL)
+	if err := contextDoneErr(ctx); err != nil {
+		return nil, err
+	}
 
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
@@ -828,6 +852,9 @@ func (e *Engine) Execute404Probing(ctx context.Context, baseURL string, httpClie
 
 	body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, notFoundURL, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := contextDoneErr(ctx); err != nil {
 		return nil, err
 	}
 
@@ -851,6 +878,18 @@ func (e *Engine) Execute404Probing(ctx context.Context, baseURL string, httpClie
 		}, nil
 	}
 	return nil, nil
+}
+
+func contextDoneErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 func (e *Engine) match404PageFingerprints(response *HTTPResponse, httpClient httpclient.HTTPClientInterface, baseURL string) []*FingerprintMatch {

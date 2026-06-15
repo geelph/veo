@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"veo/pkg/redirect"
+	"veo/pkg/shared"
 )
 
 func TestHTTPClientRedirectFollowing(t *testing.T) {
@@ -112,6 +113,10 @@ func TestHTTPClientDefaultConfig(t *testing.T) {
 
 	if client.maxRedirects != 5 {
 		t.Errorf("默认最大重定向次数应该是5，实际得到 %d", client.maxRedirects)
+	}
+
+	if client.timeout != shared.DefaultRequestTimeout {
+		t.Errorf("默认超时时间应该是 %v，实际得到 %v", shared.DefaultRequestTimeout, client.timeout)
 	}
 }
 

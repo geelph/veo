@@ -15,6 +15,7 @@ import (
 	"veo/internal/config"
 	"veo/pkg/httpclient"
 	"veo/pkg/logger"
+	"veo/pkg/shared"
 )
 
 func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
@@ -88,7 +89,7 @@ func NewConnectivityChecker(cfg *config.Config) *ConnectivityChecker {
 	if cfg != nil && cfg.Addon.Request.Timeout > 0 {
 		httpCfg.Timeout = time.Duration(cfg.Addon.Request.Timeout) * time.Second
 	} else {
-		httpCfg.Timeout = 5 * time.Second
+		httpCfg.Timeout = shared.DefaultRequestTimeout
 	}
 	httpCfg.FollowRedirect = false
 	httpCfg.SkipTLSVerify = true

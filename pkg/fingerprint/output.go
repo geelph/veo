@@ -137,9 +137,7 @@ func (f *ConsoleOutputFormatter) FormatMatch(matches []*FingerprintMatch, respon
 		response.StatusCode,
 		response.Title,
 		response.ContentLength,
-		response.ContentType,
 		fingerprintDisplays,
-		true,
 		tags...,
 	)
 
@@ -173,9 +171,7 @@ func (f *ConsoleOutputFormatter) FormatNoMatch(response *HTTPResponse) {
 		response.StatusCode,
 		response.Title,
 		response.ContentLength,
-		response.ContentType,
 		nil,
-		false,
 	)
 
 	logger.Info(line)

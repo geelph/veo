@@ -56,43 +56,57 @@ func (proxy *Proxy) AddAddon(addon Addon) {
 
 func (proxy *Proxy) onClientConnected(client *ClientConn) {
 	for _, addon := range proxy.Addons {
-		addon.ClientConnected(client)
+		if handler, ok := addon.(ClientConnectedAddon); ok {
+			handler.ClientConnected(client)
+		}
 	}
 }
 
 func (proxy *Proxy) onClientDisconnected(client *ClientConn) {
 	for _, addon := range proxy.Addons {
-		addon.ClientDisconnected(client)
+		if handler, ok := addon.(ClientDisconnectedAddon); ok {
+			handler.ClientDisconnected(client)
+		}
 	}
 }
 
 func (proxy *Proxy) onServerConnected(connCtx *ConnContext) {
 	for _, addon := range proxy.Addons {
-		addon.ServerConnected(connCtx)
+		if handler, ok := addon.(ServerConnectedAddon); ok {
+			handler.ServerConnected(connCtx)
+		}
 	}
 }
 
 func (proxy *Proxy) onServerDisconnected(connCtx *ConnContext) {
 	for _, addon := range proxy.Addons {
-		addon.ServerDisconnected(connCtx)
+		if handler, ok := addon.(ServerDisconnectedAddon); ok {
+			handler.ServerDisconnected(connCtx)
+		}
 	}
 }
 
 func (proxy *Proxy) onTLSEstablishedServer(connCtx *ConnContext) {
 	for _, addon := range proxy.Addons {
-		addon.TlsEstablishedServer(connCtx)
+		if handler, ok := addon.(TLSEstablishedServerAddon); ok {
+			handler.TlsEstablishedServer(connCtx)
+		}
 	}
 }
 
 func (proxy *Proxy) onRequestheaders(flow *Flow) {
 	for _, addon := range proxy.Addons {
-		addon.Requestheaders(flow)
+		if handler, ok := addon.(RequestHeadersAddon); ok {
+			handler.Requestheaders(flow)
+		}
 	}
 }
 
 func (proxy *Proxy) onRequestheadersUntilResponse(flow *Flow) bool {
 	for _, addon := range proxy.Addons {
-		addon.Requestheaders(flow)
+		if handler, ok := addon.(RequestHeadersAddon); ok {
+			handler.Requestheaders(flow)
+		}
 		if flow.Response != nil {
 			return true
 		}
@@ -102,7 +116,9 @@ func (proxy *Proxy) onRequestheadersUntilResponse(flow *Flow) bool {
 
 func (proxy *Proxy) onRequestUntilResponse(flow *Flow) bool {
 	for _, addon := range proxy.Addons {
-		addon.Request(flow)
+		if handler, ok := addon.(RequestAddon); ok {
+			handler.Request(flow)
+		}
 		if flow.Response != nil {
 			return true
 		}
@@ -112,13 +128,17 @@ func (proxy *Proxy) onRequestUntilResponse(flow *Flow) bool {
 
 func (proxy *Proxy) onResponseheaders(flow *Flow) {
 	for _, addon := range proxy.Addons {
-		addon.Responseheaders(flow)
+		if handler, ok := addon.(ResponseHeadersAddon); ok {
+			handler.Responseheaders(flow)
+		}
 	}
 }
 
 func (proxy *Proxy) onResponseheadersUntilBody(flow *Flow) bool {
 	for _, addon := range proxy.Addons {
-		addon.Responseheaders(flow)
+		if handler, ok := addon.(ResponseHeadersAddon); ok {
+			handler.Responseheaders(flow)
+		}
 		if flow.Response != nil && flow.Response.Body != nil {
 			return true
 		}
@@ -128,14 +148,18 @@ func (proxy *Proxy) onResponseheadersUntilBody(flow *Flow) bool {
 
 func (proxy *Proxy) onResponse(flow *Flow) {
 	for _, addon := range proxy.Addons {
-		addon.Response(flow)
+		if handler, ok := addon.(ResponseAddon); ok {
+			handler.Response(flow)
+		}
 	}
 }
 
 func (proxy *Proxy) onStreamRequestModifier(flow *Flow, in io.Reader) io.Reader {
 	out := in
 	for _, addon := range proxy.Addons {
-		out = addon.StreamRequestModifier(flow, out)
+		if handler, ok := addon.(StreamRequestModifierAddon); ok {
+			out = handler.StreamRequestModifier(flow, out)
+		}
 	}
 	return out
 }
@@ -143,7 +167,9 @@ func (proxy *Proxy) onStreamRequestModifier(flow *Flow, in io.Reader) io.Reader 
 func (proxy *Proxy) onStreamResponseModifier(flow *Flow, in io.Reader) io.Reader {
 	out := in
 	for _, addon := range proxy.Addons {
-		out = addon.StreamResponseModifier(flow, out)
+		if handler, ok := addon.(StreamResponseModifierAddon); ok {
+			out = handler.StreamResponseModifier(flow, out)
+		}
 	}
 	return out
 }
@@ -198,21 +224,69 @@ func (proxy *Proxy) getUpstreamConn(ctx context.Context, req *http.Request) (net
 	return (&net.Dialer{}).DialContext(ctx, "tcp", address)
 }
 
-type Addon interface {
+type Addon interface{}
+
+type ClientConnectedAddon interface {
 	ClientConnected(*ClientConn)
+}
+
+type ClientDisconnectedAddon interface {
 	ClientDisconnected(*ClientConn)
+}
+
+type ServerConnectedAddon interface {
 	ServerConnected(*ConnContext)
+}
+
+type ServerDisconnectedAddon interface {
 	ServerDisconnected(*ConnContext)
+}
+
+type TLSEstablishedServerAddon interface {
 	TlsEstablishedServer(*ConnContext)
+}
+
+type RequestHeadersAddon interface {
 	Requestheaders(*Flow)
+}
+
+type RequestAddon interface {
 	Request(*Flow)
+}
+
+type ResponseHeadersAddon interface {
 	Responseheaders(*Flow)
+}
+
+type ResponseAddon interface {
 	Response(*Flow)
+}
+
+type StreamRequestModifierAddon interface {
 	StreamRequestModifier(*Flow, io.Reader) io.Reader
+}
+
+type StreamResponseModifierAddon interface {
 	StreamResponseModifier(*Flow, io.Reader) io.Reader
 }
 
+type FullAddon interface {
+	ClientConnectedAddon
+	ClientDisconnectedAddon
+	ServerConnectedAddon
+	ServerDisconnectedAddon
+	TLSEstablishedServerAddon
+	RequestHeadersAddon
+	RequestAddon
+	ResponseHeadersAddon
+	ResponseAddon
+	StreamRequestModifierAddon
+	StreamResponseModifierAddon
+}
+
 type BaseAddon struct{}
+
+var _ FullAddon = (*BaseAddon)(nil)
 
 func (addon *BaseAddon) ClientConnected(*ClientConn)                            {}
 func (addon *BaseAddon) ClientDisconnected(*ClientConn)                         {}

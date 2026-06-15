@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +52,8 @@ type StatsUpdater interface {
 	IncrementCompletedHosts()
 }
 
+type ProcessResultHook func(*interfaces.HTTPResponse, error)
+
 func buildHTTPClientConfig(config *RequestConfig, sameHostOnly bool) *httpclient.Config {
 	return &httpclient.Config{
 		Timeout:            config.Timeout,
@@ -74,6 +75,28 @@ func cloneStringMap(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+func cloneRequestConfig(src *RequestConfig) *RequestConfig {
+	if src == nil {
+		return nil
+	}
+
+	dst := *src
+	if src.UserAgents != nil {
+		dst.UserAgents = append([]string(nil), src.UserAgents...)
+	}
+	return &dst
+}
+
+func normalizeRequestConfig(config *RequestConfig) *RequestConfig {
+	if config == nil {
+		config = getDefaultConfig()
+	} else {
+		config = cloneRequestConfig(config)
+	}
+	config.Timeout = shared.NormalizeRequestTimeout(config.Timeout)
+	return config
 }
 
 func (rp *RequestProcessor) initializeProcessingStats(totalURLs int, maxConcurrent int, randomUA bool) *ProcessingStats {
@@ -129,9 +152,7 @@ func (rp *RequestProcessor) logProcessingResults(stats *ProcessingStats) {
 
 // NewRequestProcessor 创建新的请求处理器
 func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
-	if config == nil {
-		config = getDefaultConfig()
-	}
+	config = normalizeRequestConfig(config)
 
 	processor := &RequestProcessor{
 		client:         httpclient.New(buildHTTPClientConfig(config, true)), // 默认开启同源限制，后续可通过SetRedirectSameHostOnly修改
@@ -146,20 +167,23 @@ func NewRequestProcessor(config *RequestConfig) *RequestProcessor {
 	return processor
 }
 
-// CloneWithContext 创建当前处理器的副本，复用底层Client，但使用新的上下文和超时设置
+// CloneWithContext 创建当前处理器的副本，并使用新的模块上下文和超时设置
 func (rp *RequestProcessor) CloneWithContext(moduleContext string, timeout time.Duration) *RequestProcessor {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
 
-	// 浅拷贝配置
-	newConfig := *rp.config
+	newConfig := cloneRequestConfig(rp.config)
+	if newConfig == nil {
+		newConfig = getDefaultConfig()
+	}
 	if timeout > 0 {
 		newConfig.Timeout = timeout
 	}
+	newConfig.Timeout = shared.NormalizeRequestTimeout(newConfig.Timeout)
 
 	clone := &RequestProcessor{
-		client:               rp.client, // 复用Client
-		config:               &newConfig,
+		client:               httpclient.New(buildHTTPClientConfig(newConfig, rp.redirectSameHostOnly)),
+		config:               newConfig,
 		userAgentPool:        rp.userAgentPool,
 		titleExtractor:       rp.titleExtractor,
 		moduleContext:        moduleContext,
@@ -171,6 +195,18 @@ func (rp *RequestProcessor) CloneWithContext(moduleContext string, timeout time.
 	}
 
 	return clone
+}
+
+func (rp *RequestProcessor) EffectiveTimeout() time.Duration {
+	config := rp.GetConfig()
+	if config == nil {
+		return shared.DefaultRequestTimeout
+	}
+	return shared.NormalizeRequestTimeout(config.Timeout)
+}
+
+func (rp *RequestProcessor) WithTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(normalizeContext(ctx), rp.EffectiveTimeout())
 }
 
 // SetRedirectSameHostOnly 控制重定向是否限制同主机
@@ -225,7 +261,7 @@ func (rp *RequestProcessor) ProcessURLsWithContext(ctx context.Context, urls []s
 	var responsesMu sync.Mutex
 
 	// 并发处理（worker pool）：支持 ctx 取消后停止派发
-	rp.processURLsConcurrent(ctx, urls, &responses, &responsesMu, stats, nil, nil)
+	rp.processURLsConcurrent(ctx, urls, &responses, &responsesMu, stats, nil, nil, nil)
 
 	// 完成处理
 	rp.finalizeProcessing(stats)
@@ -235,6 +271,10 @@ func (rp *RequestProcessor) ProcessURLsWithContext(ctx context.Context, urls []s
 
 // ProcessURLsWithCallbackOnlyWithContextAndProgress 仅通过回调处理响应（可取消），支持请求完成回调
 func (rp *RequestProcessor) ProcessURLsWithCallbackOnlyWithContextAndProgress(ctx context.Context, urls []string, callback func(*interfaces.HTTPResponse), onProcessed func()) {
+	rp.ProcessURLsWithCallbackAndResultHook(ctx, urls, callback, onProcessed, nil)
+}
+
+func (rp *RequestProcessor) ProcessURLsWithCallbackAndResultHook(ctx context.Context, urls []string, callback func(*interfaces.HTTPResponse), onProcessed func(), onResult ProcessResultHook) {
 	if len(urls) == 0 {
 		return
 	}
@@ -244,12 +284,12 @@ func (rp *RequestProcessor) ProcessURLsWithCallbackOnlyWithContextAndProgress(ct
 
 	rp.updateTotalRequests(int64(len(urls)))
 
-	rp.processURLsConcurrent(ctx, urls, nil, nil, stats, callback, onProcessed)
+	rp.processURLsConcurrent(ctx, urls, nil, nil, stats, callback, onProcessed, onResult)
 	rp.finalizeProcessing(stats)
 }
 
 // processURLsConcurrent 使用 worker pool 并发处理URL列表（支持 ctx 取消）
-func (rp *RequestProcessor) processURLsConcurrent(ctx context.Context, urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse), onProcessed func()) {
+func (rp *RequestProcessor) processURLsConcurrent(ctx context.Context, urls []string, responses *[]*interfaces.HTTPResponse, responsesMu *sync.Mutex, stats *ProcessingStats, callback func(*interfaces.HTTPResponse), onProcessed func(), onResult ProcessResultHook) {
 	maxConcurrent := rp.config.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
@@ -288,6 +328,9 @@ func (rp *RequestProcessor) processURLsConcurrent(ctx context.Context, urls []st
 
 					response, reqErr := rp.processURLWithContext(ctx, targetURL)
 					rp.updateProcessingStats(response, reqErr, responses, responsesMu, stats)
+					if onResult != nil {
+						onResult(response, reqErr)
+					}
 					if onProcessed != nil {
 						onProcessed()
 					}
@@ -383,7 +426,7 @@ func (rp *RequestProcessor) RequestOnceWithHeaders(ctx context.Context, rawURL s
 
 // HTTP请求相关方法
 
-func (rp *RequestProcessor) makeRequestWithHeaders(rawURL string, extraHeaders map[string]string) (*interfaces.HTTPResponse, error) {
+func (rp *RequestProcessor) makeRequestWithHeaders(ctx context.Context, rawURL string, extraHeaders map[string]string) (*interfaces.HTTPResponse, error) {
 	// 准备头部
 	headers := rp.getDefaultHeaders()
 	shouldRemoveCookie := rp.isDirscanModule() && !rp.shouldInjectShiroCookie()
@@ -402,7 +445,7 @@ func (rp *RequestProcessor) makeRequestWithHeaders(rawURL string, extraHeaders m
 	startTime := time.Now()
 
 	// 使用 httpclient 发起请求
-	body, statusCode, respHeaders, err := rp.client.MakeRequestFullWithHeaders(rawURL, headers)
+	body, statusCode, respHeaders, err := rp.client.MakeRequestFullWithHeadersContext(ctx, rawURL, headers)
 	if err != nil {
 		rp.logRequestError(rawURL, err)
 		return nil, fmt.Errorf("request failed: %v", err)
@@ -428,11 +471,13 @@ func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
 func (rp *RequestProcessor) GetConfig() *RequestConfig {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
-	return rp.config
+	return cloneRequestConfig(rp.config)
 }
 
 // UpdateConfig 更新配置
 func (rp *RequestProcessor) UpdateConfig(config *RequestConfig) {
+	config = normalizeRequestConfig(config)
+
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 
@@ -492,15 +537,9 @@ func (rp *RequestProcessor) IsBatchMode() bool {
 	return rp.batchMode
 }
 
-// 性能优化：预编译的超时错误正则表达式
-var timeoutErrorRegex = regexp.MustCompile(`(?i)(timeout|timed out|context canceled|context deadline exceeded|dial timeout|read timeout|write timeout|i/o timeout|deadline exceeded|operation was canceled)`)
-
 // IsTimeoutOrCanceledError 判断是否为超时或取消相关的错误（对外提供）
 func IsTimeoutOrCanceledError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return timeoutErrorRegex.MatchString(err.Error())
+	return shared.IsTimeoutOrCanceledError(err)
 }
 
 // isTimeoutOrCanceledError 判断是否为超时或取消相关的错误（性能优化版）
@@ -587,13 +626,21 @@ func (rp *RequestProcessor) getRandomUserAgent() string {
 
 // MakeRequest 实现 httpclient.HTTPClientInterface 接口
 func (rp *RequestProcessor) MakeRequest(rawURL string) (string, int, error) {
-	resp, err := rp.makeRequestWithHeadersRetry(context.Background(), rawURL, nil)
-	return responseBodyAndStatus(resp, err)
+	return rp.MakeRequestWithContext(context.Background(), rawURL)
 }
 
 // MakeRequestWithHeaders 实现 httpclient.HeaderAwareClient 接口
 func (rp *RequestProcessor) MakeRequestWithHeaders(rawURL string, headers map[string]string) (string, int, error) {
-	resp, err := rp.makeRequestWithHeadersRetry(context.Background(), rawURL, headers)
+	return rp.MakeRequestWithHeadersContext(context.Background(), rawURL, headers)
+}
+
+func (rp *RequestProcessor) MakeRequestWithContext(ctx context.Context, rawURL string) (string, int, error) {
+	resp, err := rp.makeRequestWithHeadersRetry(ctx, rawURL, nil)
+	return responseBodyAndStatus(resp, err)
+}
+
+func (rp *RequestProcessor) MakeRequestWithHeadersContext(ctx context.Context, rawURL string, headers map[string]string) (string, int, error) {
+	resp, err := rp.makeRequestWithHeadersRetry(ctx, rawURL, headers)
 	return responseBodyAndStatus(resp, err)
 }
 
@@ -607,10 +654,21 @@ func responseBodyAndStatus(resp *interfaces.HTTPResponse, err error) (string, in
 	return resp.ResponseBody, resp.StatusCode, nil
 }
 
+func dropResponseAfterContextDone(ctx context.Context, resp *interfaces.HTTPResponse, err error) (*interfaces.HTTPResponse, error) {
+	if err != nil {
+		return resp, err
+	}
+	if ctxErr := contextDoneErr(ctx); ctxErr != nil {
+		return nil, ctxErr
+	}
+	return resp, nil
+}
+
 func (rp *RequestProcessor) makeRequestWithHeadersRetry(ctx context.Context, rawURL string, headers map[string]string) (*interfaces.HTTPResponse, error) {
 	maxRetries := rp.config.MaxRetries
 	if maxRetries <= 0 {
-		return rp.makeRequestWithHeaders(rawURL, headers)
+		resp, err := rp.makeRequestWithHeaders(ctx, rawURL, headers)
+		return dropResponseAfterContextDone(ctx, resp, err)
 	}
 
 	var lastErr error
@@ -623,9 +681,9 @@ func (rp *RequestProcessor) makeRequestWithHeadersRetry(ctx context.Context, raw
 			logger.Debug(fmt.Sprintf("重试 %d/%d: %s", attempt, maxRetries, rawURL))
 		}
 
-		resp, err := rp.makeRequestWithHeaders(rawURL, headers)
+		resp, err := rp.makeRequestWithHeaders(ctx, rawURL, headers)
 		if err == nil {
-			return resp, nil
+			return dropResponseAfterContextDone(ctx, resp, nil)
 		}
 		lastErr = err
 
@@ -701,7 +759,6 @@ func GetDefaultConfig() *RequestConfig {
 
 // getDefaultConfig 获取默认配置
 func getDefaultConfig() *RequestConfig {
-	timeout := 10 * time.Second
 	retries := 3
 	maxConcurrent := 100
 	connectTimeout := 5 * time.Second
@@ -717,7 +774,7 @@ func getDefaultConfig() *RequestConfig {
 	}
 
 	return &RequestConfig{
-		Timeout:            timeout,
+		Timeout:            shared.DefaultRequestTimeout,
 		MaxRetries:         retries,
 		UserAgents:         userAgents,
 		MaxBodySize:        10 * 1024 * 1024,
@@ -874,6 +931,12 @@ func (rp *RequestProcessor) processResponse(url string, statusCode int, body str
 		if vals, ok := responseHeaders[httpclient.RemoteIPHeaderKey]; ok && len(vals) > 0 {
 			remoteIP = strings.TrimSpace(vals[0])
 			delete(responseHeaders, httpclient.RemoteIPHeaderKey)
+		}
+		if vals, ok := responseHeaders[httpclient.FinalURLHeaderKey]; ok && len(vals) > 0 {
+			if finalURL := strings.TrimSpace(vals[0]); finalURL != "" {
+				url = finalURL
+			}
+			delete(responseHeaders, httpclient.FinalURLHeaderKey)
 		}
 	}
 

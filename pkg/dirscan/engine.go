@@ -54,12 +54,15 @@ type Engine struct {
 	stats            *Statistics
 	mu               sync.RWMutex
 	requestProcessor *requests.RequestProcessor
+	stopLoss         *shared.TimeoutStopLoss
+	stopLossCancel   context.CancelFunc
+	stopLossTarget   string
 }
 
 func getDefaultConfig() *EngineConfig {
 	return &EngineConfig{
 		MaxConcurrency:   20,
-		RequestTimeout:   30 * time.Second,
+		RequestTimeout:   shared.DefaultRequestTimeout,
 		EnableCollection: true,
 		EnableFiltering:  true,
 	}
@@ -269,15 +272,37 @@ func (e *Engine) performHTTPRequestsWithCallback(ctx context.Context, scanURLs [
 	if progress != nil {
 		onProcessed = progress.Increment
 	}
+	e.mu.RLock()
+	stopLoss := e.stopLoss
+	stopLossCancel := e.stopLossCancel
+	stopLossTarget := e.stopLossTarget
+	e.mu.RUnlock()
 
-	processor.ProcessURLsWithCallbackOnlyWithContextAndProgress(ctx, scanURLs, func(resp *interfaces.HTTPResponse) {
+	var onResult requests.ProcessResultHook
+	if stopLoss != nil && stopLossCancel != nil {
+		var cancelOnce sync.Once
+		onResult = func(resp *interfaces.HTTPResponse, err error) {
+			if resp != nil || err == nil {
+				stopLoss.Record(nil)
+				return
+			}
+			if stopLoss.Record(err) {
+				cancelOnce.Do(func() {
+					logger.Infof("超时丢弃：%s", stopLossTarget)
+					stopLossCancel()
+				})
+			}
+		}
+	}
+
+	processor.ProcessURLsWithCallbackAndResultHook(ctx, scanURLs, func(resp *interfaces.HTTPResponse) {
 		if resp != nil {
 			atomic.AddInt64(&totalResponses, 1)
 		}
 		if callback != nil {
 			callback(resp)
 		}
-	}, onProcessed)
+	}, onProcessed, onResult)
 
 	atomic.StoreInt64(&e.stats.SuccessRequests, totalResponses)
 
@@ -308,6 +333,17 @@ func (e *Engine) SetRequestProcessor(processor *requests.RequestProcessor) {
 	e.mu.Unlock()
 }
 
+func (e *Engine) SetTimeoutStopLoss(stopLoss *shared.TimeoutStopLoss, cancel context.CancelFunc, target string) {
+	e.mu.Lock()
+	e.stopLoss = stopLoss
+	e.stopLossCancel = cancel
+	e.stopLossTarget = strings.TrimSpace(target)
+	if e.stopLossTarget == "" {
+		e.stopLossTarget = "unknown"
+	}
+	e.mu.Unlock()
+}
+
 // getOrCreateRequestProcessor 获取或创建请求处理器
 func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
 	e.mu.Lock()
@@ -329,6 +365,8 @@ func (e *Engine) getOrCreateRequestProcessor() *requests.RequestProcessor {
 	}
 	if e.config.RequestTimeout > 0 {
 		reqConfig.Timeout = e.config.RequestTimeout
+	} else {
+		reqConfig.Timeout = shared.NormalizeRequestTimeout(reqConfig.Timeout)
 	}
 	reqConfig.DecompressResponse = false
 	reqConfig.FollowRedirect = false

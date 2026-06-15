@@ -235,7 +235,6 @@ func (app *CLIApp) startApplication() error {
 
 		logger.Debug("指纹识别模块启动成功")
 	}
-
 	if app.args.HasModule(moduleDirscan) && app.collector != nil {
 		app.collector.EnableCollection()
 		logger.Debug("目录扫描采集器已启用")
@@ -255,28 +254,7 @@ func injectFingerprintHTTPClient(addon *fingerprint.FingerprintAddon, shiro bool
 		return
 	}
 
-	globalReqConfig := config.GetRequestConfig()
-	procConfig := requests.GetDefaultConfig()
-
-	if globalReqConfig != nil {
-		if globalReqConfig.Timeout > 0 {
-			procConfig.Timeout = time.Duration(globalReqConfig.Timeout) * time.Second
-		}
-		if globalReqConfig.Retry > 0 {
-			procConfig.MaxRetries = globalReqConfig.Retry
-		}
-		if globalReqConfig.Threads > 0 {
-			procConfig.MaxConcurrent = globalReqConfig.Threads
-		}
-		if globalReqConfig.RandomUA != nil {
-			procConfig.RandomUserAgent = *globalReqConfig.RandomUA
-		}
-	}
-
-	if proxyCfg := config.GetProxyConfig(); proxyCfg.UpstreamProxy != "" {
-		procConfig.ProxyURL = proxyCfg.UpstreamProxy
-	}
-
+	procConfig := buildPassiveFingerprintRequestConfig(nil)
 	requestProcessor := requests.NewRequestProcessor(procConfig)
 	requestProcessor.SetModuleContext("fingerprint-passive")
 	if shiro {
@@ -297,6 +275,10 @@ func (app *CLIApp) newPassiveScanController() *ScanController {
 		}
 	}
 	if strings.TrimSpace(app.args.Output) == "" {
+		return controller
+	}
+
+	if !shouldUseRealtimeCSVReport(app.args.Output) {
 		return controller
 	}
 

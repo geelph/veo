@@ -102,6 +102,7 @@ func (connCtx *ConnContext) Id() uuid.UUID {
 type Request struct {
 	Method string
 	URL    *url.URL
+	Host   string
 	Proto  string
 	Header http.Header
 	Body   []byte
@@ -113,6 +114,7 @@ func newRequest(req *http.Request) *Request {
 	return &Request{
 		Method: req.Method,
 		URL:    req.URL,
+		Host:   req.Host,
 		Proto:  req.Proto,
 		Header: req.Header,
 		raw:    req,
@@ -127,6 +129,7 @@ func (req *Request) MarshalJSON() ([]byte, error) {
 	r := make(map[string]interface{})
 	r["method"] = req.Method
 	r["url"] = req.URL.String()
+	r["host"] = req.Host
 	r["proto"] = req.Proto
 	r["header"] = req.Header
 	return json.Marshal(r)
@@ -174,10 +177,19 @@ func (req *Request) UnmarshalJSON(data []byte) error {
 	*req = Request{
 		Method: r["method"].(string),
 		URL:    u,
+		Host:   stringValueFromJSON(r["host"]),
 		Proto:  r["proto"].(string),
 		Header: header,
 	}
 	return nil
+}
+
+func stringValueFromJSON(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	text, _ := value.(string)
+	return text
 }
 
 type Response struct {

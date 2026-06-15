@@ -28,13 +28,13 @@ const (
 	ColorBrandGreen         = "\033[38;2;14;184;58m" // 品牌绿色 (#0eb83a) - 24位真彩色
 	ColorBrandGreenFallback = "\033[32m"             // 降级方案 - 标准绿色（16色兼容）
 
-	// 指纹名称专用颜色（#44cef6）
-	ColorFingerprintCyan         = "\033[38;2;68;206;246m" // 天青色 (#44cef6)
-	ColorFingerprintCyanFallback = "\033[36m"              // 降级方案 - 青色
+	// 指纹名称专用颜色（浅紫色）
+	ColorFingerprintLightPurple         = "\033[38;2;218;176;255m"
+	ColorFingerprintLightPurpleFallback = "\033[95m"
 
-	// 指纹标题专用颜色（#3eede7）
-	ColorFingerprintTitleCyan         = "\033[38;2;62;237;231m"
-	ColorFingerprintTitleCyanFallback = "\033[36m"
+	// 标题统一高亮颜色（#3eede7）
+	ColorTitleHighlight         = "\033[38;2;62;237;231m"
+	ColorTitleHighlightFallback = "\033[36m"
 
 	// 标签专用颜色（#ff2121）
 	ColorTagHighlight         = "\033[38;2;255;33;33m"
@@ -70,13 +70,13 @@ func FormatFullURL(url string) string {
 	return getBrandGreenColor() + url + ColorReset
 }
 
-// FormatFingerprintName 格式化指纹名称显示（统一蓝色显示，无加粗）
+// FormatFingerprintName 格式化指纹名称显示（统一浅紫色显示，无加粗）
 func FormatFingerprintName(name string) string {
 	if !shouldUseColors() {
 		return name // 如果禁用彩色输出，直接返回指纹名称
 	}
 
-	// 使用指定天青色显示指纹信息
+	// 使用浅紫色显示指纹信息
 	return getFingerprintColor() + name + ColorReset
 }
 
@@ -104,6 +104,9 @@ func FormatStatusCode(statusCode int) string {
 
 // FormatTitle 格式化标题显示
 func FormatTitle(title string) string {
+	if strings.TrimSpace(title) == "" {
+		title = "无标题"
+	}
 	finalTitle := title
 	if !strings.HasPrefix(title, "[") || !strings.HasSuffix(title, "]") {
 		finalTitle = fmt.Sprintf("[%s]", title)
@@ -112,22 +115,7 @@ func FormatTitle(title string) string {
 	if !shouldUseColors() {
 		return finalTitle
 	}
-	return finalTitle + ColorReset
-}
-
-// FormatFingerprintTitle 格式化指纹匹配后的标题显示（青色，不加粗）
-func FormatFingerprintTitle(title string) string {
-	// 检查标题是否已经包含方括号
-	finalTitle := title
-	if !strings.HasPrefix(title, "[") || !strings.HasSuffix(title, "]") {
-		finalTitle = fmt.Sprintf("[%s]", title)
-	}
-
-	if !shouldUseColors() {
-		return finalTitle
-	}
-	// 使用统一青色显示匹配标题
-	return getFingerprintTitleColor() + finalTitle + ColorReset
+	return getTitleColor() + finalTitle + ColorReset
 }
 
 // FormatContentLength 格式化内容长度显示
@@ -139,36 +127,6 @@ func FormatContentLength(length int) string {
 	}
 	// 修改：内容长度使用加粗默认颜色显示
 	return fmt.Sprintf("%s%s", lenStr, ColorReset)
-}
-
-// FormatContentType 格式化内容类型显示（简化格式，只保留主要类型）
-func FormatContentType(contentType string) string {
-	// 简化Content-Type：只保留分号前的主要类型
-	simplifiedType := simplifyContentType(contentType)
-
-	displayType := fmt.Sprintf("[%s]", simplifiedType)
-
-	if !shouldUseColors() {
-		return displayType // 如果禁用彩色输出，直接返回简化的内容类型
-	}
-	return displayType + ColorReset
-}
-
-// simplifyContentType 简化Content-Type，只保留分号前的主要类型
-// 例如：application/json;charset=utf-8 -> application/json
-func simplifyContentType(contentType string) string {
-	if contentType == "" {
-		return contentType
-	}
-
-	// 查找第一个分号的位置
-	if semicolonIndex := strings.Index(contentType, ";"); semicolonIndex != -1 {
-		// 返回分号前的内容，并去除前后空格
-		return strings.TrimSpace(contentType[:semicolonIndex])
-	}
-
-	// 如果没有分号，返回原始内容（去除前后空格）
-	return strings.TrimSpace(contentType)
 }
 
 // FormatDSLRule 格式化DSL规则显示（指纹识别专用）
@@ -276,15 +234,15 @@ func getFingerprintColor() string {
 	if !shouldUseColors() {
 		return ""
 	}
-	return ColorFingerprintCyanFallback
+	return ColorFingerprintLightPurpleFallback
 }
 
-// getFingerprintTitleColor 获取指纹匹配标题颜色（支持降级）
-func getFingerprintTitleColor() string {
+// getTitleColor 获取标题高亮颜色（支持降级）
+func getTitleColor() string {
 	if !shouldUseColors() {
 		return ""
 	}
-	return ColorFingerprintTitleCyanFallback
+	return ColorTitleHighlightFallback
 }
 
 // getTagHighlightColor 获取标签高亮颜色（支持降级）
@@ -336,19 +294,8 @@ func HighlightSnippet(snippet, matcher string) string {
 	return highlighted
 }
 
-// FormatTitleForMatch 根据是否命中指纹选择标题颜色
-func FormatTitleForMatch(title string, matched bool) string {
-	if strings.TrimSpace(title) == "" {
-		title = "无标题"
-	}
-	if matched {
-		return FormatFingerprintTitle(title)
-	}
-	return FormatTitle(title)
-}
-
-// FormatLogLine 构造统一的日志输出格式：URL 状态码 标题 Content-Length Content-Type 指纹
-func FormatLogLine(url string, statusCode int, title string, contentLength int64, contentType string, fingerprints []string, matched bool, tags ...string) string {
+// FormatLogLine 构造统一的日志输出格式：URL 状态码 标题 Content-Length 指纹
+func FormatLogLine(url string, statusCode int, title string, contentLength int64, fingerprints []string, tags ...string) string {
 	if contentLength < 0 {
 		contentLength = 0
 	}
@@ -356,9 +303,8 @@ func FormatLogLine(url string, statusCode int, title string, contentLength int64
 	parts := []string{
 		FormatURL(url),
 		FormatStatusCode(statusCode),
-		FormatTitleForMatch(title, matched),
+		FormatTitle(title),
 		FormatContentLength(int(contentLength)),
-		FormatContentType(contentType),
 	}
 
 	fp := strings.TrimSpace(strings.Join(fingerprints, " "))
@@ -379,9 +325,9 @@ func FormatLogLine(url string, statusCode int, title string, contentLength int64
 }
 
 // FormatLogLineWithURLSuffix 构造支持URL后缀的日志行（用于长URL单行展示）
-func FormatLogLineWithURLSuffix(url string, urlSuffix string, statusCode int, title string, contentLength int64, contentType string, fingerprints []string, matched bool, tags ...string) string {
+func FormatLogLineWithURLSuffix(url string, urlSuffix string, statusCode int, title string, contentLength int64, fingerprints []string, tags ...string) string {
 	if strings.TrimSpace(urlSuffix) == "" {
-		return FormatLogLine(url, statusCode, title, contentLength, contentType, fingerprints, matched, tags...)
+		return FormatLogLine(url, statusCode, title, contentLength, fingerprints, tags...)
 	}
 	if contentLength < 0 {
 		contentLength = 0
@@ -392,9 +338,8 @@ func FormatLogLineWithURLSuffix(url string, urlSuffix string, statusCode int, ti
 	parts := []string{
 		urlPart,
 		FormatStatusCode(statusCode),
-		FormatTitleForMatch(title, matched),
+		FormatTitle(title),
 		FormatContentLength(int(contentLength)),
-		FormatContentType(contentType),
 	}
 
 	fp := strings.TrimSpace(strings.Join(fingerprints, " "))

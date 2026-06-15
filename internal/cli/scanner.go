@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"veo/internal/config"
 	"veo/pkg/fingerprint"
@@ -20,6 +19,7 @@ import (
 type ScanController struct {
 	args                   *CLIArgs
 	config                 *config.Config
+	runtimeConfig          *RuntimeConfig
 	requestProcessor       *requests.RequestProcessor
 	fingerprintEngine      *fingerprint.Engine
 	probedHosts            map[string]bool
@@ -42,42 +42,16 @@ type ScanController struct {
 }
 
 func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
-	threads := args.Threads
-	if threads <= 0 {
-		threads = 100
-	}
-	retry := 1
-	if args.RetrySet {
-		retry = args.Retry
-	}
-	timeout := args.Timeout
-	if timeout <= 0 {
-		timeout = 3
-	}
-	requestConfig := &requests.RequestConfig{
-		Timeout:            time.Duration(timeout) * time.Second,
-		MaxRetries:         retry,
-		MaxConcurrent:      threads,
-		RandomUserAgent:    args.RandomUA,
-		DecompressResponse: true,
-	}
-	requests.ApplyRedirectPolicy(requestConfig)
-
-	proxyURL := strings.TrimSpace(args.Proxy)
-	if proxyURL == "" {
-		if proxyCfg := config.GetProxyConfig(); proxyCfg != nil {
-			proxyURL = strings.TrimSpace(proxyCfg.UpstreamProxy)
-		}
-	}
-	if proxyURL != "" {
-		requestConfig.ProxyURL = proxyURL
-		logger.Debugf("ActiveScan: 设置请求处理器代理: %s", requestConfig.ProxyURL)
-	}
+	runtimeConfig := buildRuntimeConfig(args)
+	requestConfig := runtimeConfig.Request
 
 	if !args.CheckSimilarOnly {
 		logger.Debugf("请求处理器并发数设置为: %d", requestConfig.MaxConcurrent)
 		logger.Debugf("请求处理器重试次数设置为: %d", requestConfig.MaxRetries)
 		logger.Debugf("请求处理器超时时间设置为: %v", requestConfig.Timeout)
+		if requestConfig.ProxyURL != "" {
+			logger.Debugf("ActiveScan: 设置请求处理器代理: %s", requestConfig.ProxyURL)
+		}
 	}
 
 	var fpEngine *fingerprint.Engine
@@ -95,9 +69,8 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	if len(args.Modules) == 1 && args.Modules[0] == moduleFinger {
 		requestProcessor.SetModuleContext("fingerprint")
 	}
-	customHeaders := config.GetCustomHeaders()
-	if len(customHeaders) > 0 {
-		requestProcessor.SetCustomHeaders(customHeaders)
+	if len(runtimeConfig.Headers) > 0 {
+		requestProcessor.SetCustomHeaders(runtimeConfig.Headers)
 	}
 	if args.Shiro {
 		requestProcessor.SetShiroCookieEnabled(true)
@@ -138,6 +111,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 	sc := &ScanController{
 		args:                   args,
 		config:                 cfg,
+		runtimeConfig:          runtimeConfig,
 		requestProcessor:       requestProcessor,
 		fingerprintEngine:      fpEngine,
 		probedHosts:            make(map[string]bool),
@@ -152,7 +126,7 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 }
 
 func (sc *ScanController) Run() error {
-	if strings.TrimSpace(sc.reportPath) != "" && !isJSONReportPath(sc.reportPath) {
+	if shouldUseRealtimeCSVReport(sc.reportPath) {
 		realtimeReporter, err := reporter.NewRealtimeCSVReporter(sc.reportPath)
 		if err != nil {
 			logger.Warnf("Failed to create realtime CSV report: %v", err)

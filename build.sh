@@ -122,6 +122,7 @@ veo 编译脚本
     --no-compress      不使用UPX压缩
     --with-debug       包含调试信息
     --race             启用竞态检测
+    --list-platforms   仅输出支持的平台列表
     
 平台格式: OS/ARCH
 支持的平台:
@@ -394,6 +395,10 @@ show_version_info() {
     echo ""
 }
 
+list_supported_platforms() {
+    echo "${SUPPORTED_PLATFORMS[*]}"
+}
+
 # ============================================================================
 # 主程序
 # ============================================================================
@@ -412,6 +417,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
             show_help
+            exit 0
+            ;;
+        --list-platforms)
+            list_supported_platforms
             exit 0
             ;;
         -c|--clean)

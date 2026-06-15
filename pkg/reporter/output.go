@@ -56,6 +56,18 @@ type fingerprintMatchGroup struct {
 	Matches   []SDKFingerprintMatchOutput
 }
 
+type responseRecord struct {
+	Timestamp    time.Time
+	URL          string
+	Host         string
+	StatusCode   int
+	Title        string
+	Length       int64
+	ContentType  string
+	DurationMs   int64
+	Fingerprints []SDKFingerprintMatchOutput
+}
+
 const outputTimestampLayout = "2006/01/02 15:04:05"
 
 func formatOutputTimestamp(ts time.Time) string {
@@ -73,8 +85,8 @@ func firstNonZeroTime(candidates ...time.Time) time.Time {
 
 func buildCombinedAPIResponse(dirPages []types.HTTPResponse, fpPages []types.HTTPResponse, matches []types.FingerprintMatch) CombinedAPIResponse {
 	return CombinedAPIResponse{
-		Fingerprint: makeFingerprintPageResults(fpPages, matches),
-		Dirscan:     makeDirscanPageResults(dirPages),
+		Fingerprint: makeFingerprintPageResults(toResponseRecords(fpPages), matches),
+		Dirscan:     makeDirscanPageResults(toResponseRecords(dirPages)),
 	}
 }
 
@@ -89,27 +101,22 @@ func GenerateCombinedJSON(dirPages []types.HTTPResponse, fingerprintPages []type
 }
 
 // makeDirscanPageResults 构造目录扫描结果列表
-func makeDirscanPageResults(pages []types.HTTPResponse) []DirscanAPIPage {
-	if len(pages) == 0 {
+func makeDirscanPageResults(records []responseRecord) []DirscanAPIPage {
+	if len(records) == 0 {
 		return nil
 	}
 
-	results := make([]DirscanAPIPage, 0, len(pages))
-	for _, page := range pages {
-		length := page.ContentLength
-		if length == 0 {
-			length = page.Length
-		}
-
+	results := make([]DirscanAPIPage, 0, len(records))
+	for _, record := range records {
 		results = append(results, DirscanAPIPage{
-			Timestamp:     formatOutputTimestamp(page.Timestamp),
-			URL:           page.URL,
-			StatusCode:    page.StatusCode,
-			Title:         page.Title,
-			ContentLength: length,
-			DurationMs:    page.Duration,
-			ContentType:   page.ContentType,
-			Fingerprints:  toSDKMatchesFromInterfaces(page.Fingerprints),
+			Timestamp:     formatOutputTimestamp(record.Timestamp),
+			URL:           record.URL,
+			StatusCode:    record.StatusCode,
+			Title:         record.Title,
+			ContentLength: record.Length,
+			DurationMs:    record.DurationMs,
+			ContentType:   record.ContentType,
+			Fingerprints:  record.Fingerprints,
 		})
 	}
 
@@ -117,17 +124,17 @@ func makeDirscanPageResults(pages []types.HTTPResponse) []DirscanAPIPage {
 }
 
 // makeFingerprintPageResults 构造指纹识别结果列表
-func makeFingerprintPageResults(pages []types.HTTPResponse, matches []types.FingerprintMatch) []FingerprintAPIPage {
-	if len(pages) == 0 && len(matches) == 0 {
+func makeFingerprintPageResults(records []responseRecord, matches []types.FingerprintMatch) []FingerprintAPIPage {
+	if len(records) == 0 && len(matches) == 0 {
 		return nil
 	}
 
 	matchMap := groupMatchesByURL(matches)
-	results := make([]FingerprintAPIPage, 0, len(pages)+len(matchMap))
-	index := make(map[string]int, len(pages))
+	results := make([]FingerprintAPIPage, 0, len(records)+len(matchMap))
+	index := make(map[string]int, len(records))
 
-	for _, page := range pages {
-		key := NormalizeFingerprintURLKey(page.URL)
+	for _, record := range records {
+		key := NormalizeFingerprintURLKey(record.URL)
 		group := matchMap[key]
 		var fps []SDKFingerprintMatchOutput
 		if group != nil {
@@ -135,50 +142,42 @@ func makeFingerprintPageResults(pages []types.HTTPResponse, matches []types.Fing
 		}
 		if existingIdx, ok := index[key]; ok {
 			existing := results[existingIdx]
-			existing.Matches = mergeFingerprintOutputs(existing.Matches, toSDKMatchesFromInterfaces(page.Fingerprints))
+			existing.Matches = mergeFingerprintOutputs(existing.Matches, record.Fingerprints)
 			if len(fps) > 0 {
 				existing.Matches = mergeFingerprintOutputs(existing.Matches, fps)
 			}
 			if existing.ContentLength == 0 {
-				if page.ContentLength > 0 {
-					existing.ContentLength = page.ContentLength
-				} else if page.Length > 0 {
-					existing.ContentLength = page.Length
-				}
+				existing.ContentLength = record.Length
 			}
 			if existing.StatusCode == 0 {
-				existing.StatusCode = page.StatusCode
+				existing.StatusCode = record.StatusCode
 			}
 			if existing.Title == "" {
-				existing.Title = page.Title
+				existing.Title = record.Title
 			}
 			if existing.ContentType == "" {
-				existing.ContentType = page.ContentType
+				existing.ContentType = record.ContentType
 			}
 			if existing.DurationMs == 0 {
-				existing.DurationMs = page.Duration
+				existing.DurationMs = record.DurationMs
 			}
 			if existing.Timestamp == "" {
-				existing.Timestamp = formatOutputTimestamp(firstNonZeroTime(page.Timestamp, groupTimestamp(group)))
+				existing.Timestamp = formatOutputTimestamp(firstNonZeroTime(record.Timestamp, groupTimestamp(group)))
 			}
 			results[existingIdx] = existing
 		} else {
-			contentLength := page.ContentLength
-			if contentLength == 0 {
-				contentLength = page.Length
-			}
-			existing := toSDKMatchesFromInterfaces(page.Fingerprints)
+			existing := record.Fingerprints
 			if len(fps) > 0 {
 				existing = mergeFingerprintOutputs(existing, fps)
 			}
 			results = append(results, FingerprintAPIPage{
-				Timestamp:     formatOutputTimestamp(firstNonZeroTime(page.Timestamp, groupTimestamp(group))),
-				URL:           page.URL,
-				StatusCode:    page.StatusCode,
-				Title:         page.Title,
-				ContentLength: contentLength,
-				ContentType:   page.ContentType,
-				DurationMs:    page.Duration,
+				Timestamp:     formatOutputTimestamp(firstNonZeroTime(record.Timestamp, groupTimestamp(group))),
+				URL:           record.URL,
+				StatusCode:    record.StatusCode,
+				Title:         record.Title,
+				ContentLength: record.Length,
+				ContentType:   record.ContentType,
+				DurationMs:    record.DurationMs,
 				Matches:       existing,
 			})
 			index[key] = len(results) - 1
@@ -230,6 +229,7 @@ func groupMatchesByURL(matches []types.FingerprintMatch) map[string]*fingerprint
 			Snippet:     match.Snippet,
 		})
 	}
+
 	return grouped
 }
 
@@ -259,6 +259,49 @@ func toSDKMatchesFromInterfaces(matches []types.FingerprintMatch) []SDKFingerpri
 	}
 
 	return outputs
+}
+
+func toResponseRecords(pages []types.HTTPResponse) []responseRecord {
+	if len(pages) == 0 {
+		return nil
+	}
+
+	records := make([]responseRecord, 0, len(pages))
+	for _, page := range pages {
+		records = append(records, responseRecordFromHTTPResponse(&page))
+	}
+	return records
+}
+
+func responseRecordFromHTTPResponse(resp *types.HTTPResponse) responseRecord {
+	if resp == nil {
+		return responseRecord{}
+	}
+
+	length := resp.ContentLength
+	if length == 0 {
+		length = resp.Length
+	}
+	if length < 0 {
+		length = 0
+	}
+
+	host := ""
+	if parsed, err := url.Parse(resp.URL); err == nil {
+		host = parsed.Host
+	}
+
+	return responseRecord{
+		Timestamp:    resp.Timestamp,
+		URL:          resp.URL,
+		Host:         host,
+		StatusCode:   resp.StatusCode,
+		Title:        resp.Title,
+		Length:       length,
+		ContentType:  resp.ContentType,
+		DurationMs:   resp.Duration,
+		Fingerprints: toSDKMatchesFromInterfaces(resp.Fingerprints),
+	}
 }
 
 func mergeFingerprintOutputs(base []SDKFingerprintMatchOutput, extra []SDKFingerprintMatchOutput) []SDKFingerprintMatchOutput {
@@ -375,8 +418,9 @@ func (r *RealtimeCSVReporter) WriteResponse(resp *types.HTTPResponse) error {
 		return nil
 	}
 
-	fingerprints := make([]string, 0, len(resp.Fingerprints))
-	for _, fp := range resp.Fingerprints {
+	record := responseRecordFromHTTPResponse(resp)
+	fingerprints := make([]string, 0, len(record.Fingerprints))
+	for _, fp := range record.Fingerprints {
 		if fp.RuleName != "" {
 			fingerprints = append(fingerprints, fp.RuleName)
 		}
@@ -389,23 +433,13 @@ func (r *RealtimeCSVReporter) WriteResponse(resp *types.HTTPResponse) error {
 		return fmt.Errorf("realtime csv reporter 已关闭")
 	}
 
-	length := resp.ContentLength
-	if length < 0 {
-		length = 0
-	}
-
-	host := ""
-	if parsed, err := url.Parse(resp.URL); err == nil {
-		host = parsed.Host
-	}
-
 	if err := r.writer.Write([]string{
-		formatOutputTimestamp(resp.Timestamp),
-		resp.URL,
-		host,
-		strconv.Itoa(resp.StatusCode),
-		resp.Title,
-		strconv.FormatInt(length, 10),
+		formatOutputTimestamp(record.Timestamp),
+		record.URL,
+		record.Host,
+		strconv.Itoa(record.StatusCode),
+		record.Title,
+		strconv.FormatInt(record.Length, 10),
 		strings.Join(fingerprints, "|"),
 	}); err != nil {
 		return err

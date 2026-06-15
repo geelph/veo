@@ -3,6 +3,7 @@ package httpclient
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -54,6 +55,9 @@ type Config struct {
 // RemoteIPHeaderKey 内部传递远端IP，不参与规则匹配
 const RemoteIPHeaderKey = "X-VEO-Remote-IP"
 
+// FinalURLHeaderKey 内部传递重定向后的最终URL，不参与规则匹配
+const FinalURLHeaderKey = "X-VEO-Final-URL"
+
 // DefaultConfig 获取默认HTTP客户端配置（安全扫描优化版）
 func DefaultConfig() *Config {
 	ua := shared.Primary()
@@ -62,7 +66,7 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		Timeout:            10 * time.Second,
+		Timeout:            shared.DefaultRequestTimeout,
 		FollowRedirect:     true,
 		MaxRedirects:       5,
 		UserAgent:          ua,
@@ -92,16 +96,13 @@ func New(config *Config) *Client {
 		config = DefaultConfig()
 	}
 
-	waitTimeout := config.Timeout
-	if waitTimeout <= 0 {
-		waitTimeout = 3 * time.Second
-	}
+	config.Timeout = shared.NormalizeRequestTimeout(config.Timeout)
 	fastClient := &fasthttp.Client{
 		Name:                config.UserAgent,
 		ReadTimeout:         config.Timeout,
 		WriteTimeout:        config.Timeout,
 		MaxConnsPerHost:     config.MaxConcurrent,
-		MaxConnWaitTimeout:  waitTimeout,
+		MaxConnWaitTimeout:  config.Timeout,
 		MaxIdleConnDuration: 30 * time.Second,
 		MaxResponseBodySize: config.MaxBodySize,
 		ReadBufferSize:      16384,
@@ -147,42 +148,48 @@ func (c *Client) SetSameHostOnly(enabled bool) {
 
 // httpClientFetcher 适配器，用于将Client适配为redirect.HTTPFetcherFull接口
 type httpClientFetcher struct {
+	ctx           context.Context
 	client        *Client
 	customHeaders map[string]string
 }
 
 func (f *httpClientFetcher) MakeRequestFull(rawURL string) (string, int, map[string][]string, error) {
-	return f.client.doRequestInternal(rawURL, f.customHeaders)
+	return f.client.doRequestInternalWithContext(f.ctx, rawURL, f.customHeaders)
 }
 
 // MakeRequest 实现HTTPClientInterface接口，支持TLS和重定向
 func (c *Client) MakeRequest(rawURL string) (body string, statusCode int, err error) {
-	return c.executeRequest(rawURL, nil)
+	return c.executeRequestWithContext(context.Background(), rawURL, nil)
 }
 
 // MakeRequestWithHeaders 支持附加自定义请求头
 func (c *Client) MakeRequestWithHeaders(rawURL string, headers map[string]string) (body string, statusCode int, err error) {
-	return c.executeRequest(rawURL, headers)
+	return c.executeRequestWithContext(context.Background(), rawURL, headers)
 }
 
 // MakeRequestFull 实现扩展的HTTP请求接口，返回响应头
 func (c *Client) MakeRequestFull(rawURL string) (body string, statusCode int, headers map[string][]string, err error) {
-	return c.executeRequestFull(rawURL, nil)
+	return c.executeRequestFullWithContext(context.Background(), rawURL, nil)
 }
 
 // MakeRequestFullWithHeaders 支持自定义请求头的扩展HTTP请求接口，返回响应头
 func (c *Client) MakeRequestFullWithHeaders(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
-	return c.executeRequestFull(rawURL, customHeaders)
+	return c.executeRequestFullWithContext(context.Background(), rawURL, customHeaders)
 }
 
-func (c *Client) executeRequest(rawURL string, customHeaders map[string]string) (body string, statusCode int, err error) {
-	body, statusCode, _, err = c.executeRequestFull(rawURL, customHeaders)
+// MakeRequestFullWithHeadersContext 支持按调用方Context收敛单次请求与重定向链路。
+func (c *Client) MakeRequestFullWithHeadersContext(ctx context.Context, rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+	return c.executeRequestFullWithContext(ctx, rawURL, customHeaders)
+}
+
+func (c *Client) executeRequestWithContext(ctx context.Context, rawURL string, customHeaders map[string]string) (body string, statusCode int, err error) {
+	body, statusCode, _, err = c.executeRequestFullWithContext(ctx, rawURL, customHeaders)
 	return
 }
 
-func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+func (c *Client) executeRequestFullWithContext(ctx context.Context, rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
 	if !c.followRedirect {
-		return c.doRequestInternal(rawURL, customHeaders)
+		return c.doRequestInternalWithContext(ctx, rawURL, customHeaders)
 	}
 	redirectConfig := &redirect.Config{
 		MaxRedirects:   c.maxRedirects,
@@ -191,6 +198,7 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 	}
 
 	fetcher := &httpClientFetcher{
+		ctx:           ctx,
 		client:        c,
 		customHeaders: customHeaders,
 	}
@@ -200,11 +208,29 @@ func (c *Client) executeRequestFull(rawURL string, customHeaders map[string]stri
 		return "", 0, nil, err
 	}
 
+	if resp.ResponseHeaders == nil {
+		resp.ResponseHeaders = make(map[string][]string)
+	}
+	if resp.URL != "" {
+		resp.ResponseHeaders[FinalURLHeaderKey] = []string{resp.URL}
+	}
+
 	return resp.Body, resp.StatusCode, resp.ResponseHeaders, nil
 }
 
 // doRequestInternal 执行单次请求（fasthttp implementation）
 func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+	return c.doRequestInternalWithContext(context.Background(), rawURL, customHeaders)
+}
+
+func (c *Client) doRequestInternalWithContext(ctx context.Context, rawURL string, customHeaders map[string]string) (body string, statusCode int, headers map[string][]string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, nil, err
+	}
+
 	requestURL := encodeHashInURL(rawURL)
 	if requestURL == "" {
 		return "", 0, nil, fmt.Errorf("empty url")
@@ -237,7 +263,7 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 		}
 	}
 
-	if err := c.client.DoTimeout(req, resp, c.timeout); err != nil {
+	if err := c.doRequest(ctx, req, resp); err != nil {
 		return "", 0, nil, c.handleRequestError(err)
 	}
 
@@ -273,6 +299,25 @@ func (c *Client) doRequestInternal(rawURL string, customHeaders map[string]strin
 
 	logger.Debugf("Fasthttp请求完成: %s [%d] Size: %d", rawURL, statusCode, len(body))
 	return body, statusCode, headers, nil
+}
+
+func (c *Client) doRequest(ctx context.Context, req *fasthttp.Request, resp *fasthttp.Response) error {
+	timeout := c.timeout
+	if timeout <= 0 {
+		timeout = shared.DefaultRequestTimeout
+	}
+
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if time.Until(deadline) <= 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.DeadlineExceeded
+	}
+	return c.client.DoDeadline(req, resp, deadline)
 }
 
 func remoteIPFromAddr(addr net.Addr) string {

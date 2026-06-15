@@ -201,6 +201,9 @@ func FollowClientRedirect(response *interfaces.HTTPResponse, fetcher HTTPFetcher
 	if absoluteURL == "" {
 		return nil, fmt.Errorf("无法解析客户端重定向URL: %s", redirectURL)
 	}
+	if normalizeRedirectKey(absoluteURL) == normalizeRedirectKey(response.URL) {
+		return nil, nil
+	}
 
 	var body string
 	var statusCode int

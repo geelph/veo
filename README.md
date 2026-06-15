@@ -229,7 +229,7 @@
 |------|--------|------|------|
 | `-u` | 必填或 `-l` | 目标列表，逗号分隔。支持完整 URL、域名、`host:port`、CIDR、IP 范围；被动模式额外支持主机通配，如 `*.baidu.com`、`10.0.0.*`。 | `-u http://a.com,https://b.com` |
 | `-l` | — | 目标文件路径，每行一个目标；支持注释 `#` 和空行。 | `-l targets.txt` |
-| `-m` | `finger,dirscan` | 启用的模块，逗号分隔：`finger` 指纹识别，`dirscan` 目录扫描。 | `-m finger` |
+| `-m` | `finger,dirscan` | 启用的模块，逗号分隔：`finger` 指纹识别，`dirscan` 目录扫描。 | `-m finger,dirscan` |
 | `--listen` | `false` | 启用被动代理模式（监听 HTTP 流量），默认主动扫描；此时 `-u` 支持主机通配并按任意端口匹配。 | `--listen` |
 | `-lp` | `9080` | 被动代理监听端口，仅在 `--listen` 模式下使用。 | `-lp 8080` |
 

@@ -17,6 +17,14 @@ func isJSONReportPath(path string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".json")
 }
 
+func shouldUseRealtimeCSVReport(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	return !isJSONReportPath(path)
+}
+
 func toValueSlice(pages []*interfaces.HTTPResponse) []interfaces.HTTPResponse {
 	result := make([]interfaces.HTTPResponse, 0, len(pages))
 	for _, p := range pages {
@@ -228,9 +236,7 @@ func printHTTPResponseResult(page *interfaces.HTTPResponse, showSnippet bool, sh
 		page.StatusCode,
 		page.Title,
 		page.ContentLength,
-		page.ContentType,
 		fingerprintParts,
-		len(matches) > 0,
 	)
 
 	var messageBuilder strings.Builder

@@ -35,16 +35,8 @@ GCFLAGS := all=-dwarf=false
 ASMFLAGS := all=-trimpath=$(CURDIR)
 CGO_ENABLED := 0
 
-# 支持的平台
-PLATFORMS := \
-	windows/amd64 \
-	windows/arm64 \
-	windows/386 \
-	linux/amd64 \
-	linux/arm64 \
-	linux/arm \
-	darwin/amd64 \
-	darwin/arm64
+# 支持的平台以 build.sh 为唯一来源，避免发布矩阵漂移
+PLATFORMS := $(shell bash $(BUILD_SCRIPT) --list-platforms)
 
 # 颜色输出
 BLUE := \033[34m

@@ -47,21 +47,19 @@ func (sc *ScanController) runFingerprintModuleWithContext(ctx context.Context, t
 
 		needsUpdate := !cfg.DecompressResponse || !cfg.FollowRedirect || cfg.MaxRedirects != requests.DefaultMaxRedirects
 		if needsUpdate {
-			updated := *cfg
-			updated.DecompressResponse = true
-			requests.ApplyRedirectPolicy(&updated)
-			sc.requestProcessor.UpdateConfig(&updated)
+			cfg.DecompressResponse = true
+			requests.ApplyRedirectPolicy(cfg)
+			sc.requestProcessor.UpdateConfig(cfg)
 		}
 	}
 
 	defer func() {
 		if cfg := sc.requestProcessor.GetConfig(); cfg != nil {
 			if cfg.DecompressResponse != originalDecompress || cfg.FollowRedirect != originalFollowRedirect || cfg.MaxRedirects != originalMaxRedirects {
-				updated := *cfg
-				updated.DecompressResponse = originalDecompress
-				updated.FollowRedirect = originalFollowRedirect
-				updated.MaxRedirects = originalMaxRedirects
-				sc.requestProcessor.UpdateConfig(&updated)
+				cfg.DecompressResponse = originalDecompress
+				cfg.FollowRedirect = originalFollowRedirect
+				cfg.MaxRedirects = originalMaxRedirects
+				sc.requestProcessor.UpdateConfig(cfg)
 			}
 		}
 	}()
@@ -156,8 +154,7 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 				default:
 				}
 
-				taskTimeout := sc.requestProcessor.GetConfig().Timeout
-				targetCtx, targetCancel := context.WithTimeout(ctx, taskTimeout)
+				targetCtx, targetCancel := sc.requestProcessor.WithTimeout(ctx)
 				results := sc.processSingleTargetFingerprintWithContext(targetCtx, targetURL, progressTracker)
 				targetCancel()
 
@@ -198,27 +195,19 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 	return allResults, nil
 }
 
-func (sc *ScanController) processSingleTargetFingerprintWithContext(ctx context.Context, target string, progressTracker *stats.RequestProgress) []interfaces.HTTPResponse {
-	resultChan := make(chan []interfaces.HTTPResponse, 1)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("Fingerprint panic: %v, target: %s", r, target)
-				resultChan <- nil
-			}
-		}()
-
-		resultChan <- sc.processSingleTargetFingerprint(ctx, target, progressTracker)
+func (sc *ScanController) processSingleTargetFingerprintWithContext(ctx context.Context, target string, progressTracker *stats.RequestProgress) (results []interfaces.HTTPResponse) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("Fingerprint panic: %v, target: %s", r, target)
+			results = nil
+		}
 	}()
 
-	select {
-	case res := <-resultChan:
-		return res
-	case <-ctx.Done():
+	results = sc.processSingleTargetFingerprint(ctx, target, progressTracker)
+	if ctx != nil && ctx.Err() != nil && len(results) == 0 {
 		logger.Debugf("目标处理超时: %s", target)
-		return nil
 	}
+	return results
 }
 
 func (sc *ScanController) processSingleTargetFingerprint(ctx context.Context, target string, progressTracker *stats.RequestProgress) []interfaces.HTTPResponse {
@@ -282,49 +271,55 @@ func (sc *ScanController) buildFingerprintProgressLabel(targets []string) string
 	return "Fingerprint"
 }
 
-type progressHTTPClient struct {
-	base      httpclient.HTTPClientInterface
-	header    httpclient.HeaderAwareClient
+type contextHTTPClient struct {
+	ctx       context.Context
+	processor *requests.RequestProcessor
 	onRequest func()
+	gate      chan struct{}
 }
 
-func (c *progressHTTPClient) MakeRequest(rawURL string) (string, int, error) {
-	body, statusCode, err := c.base.MakeRequest(rawURL)
+func (c *contextHTTPClient) MakeRequest(rawURL string) (string, int, error) {
+	if err := c.acquire(); err != nil {
+		return "", 0, err
+	}
+	defer c.release()
+
+	body, statusCode, err := c.processor.MakeRequestWithContext(c.ctx, rawURL)
 	if c.onRequest != nil {
 		c.onRequest()
 	}
 	return body, statusCode, err
 }
 
-func (c *progressHTTPClient) MakeRequestWithHeaders(rawURL string, headers map[string]string) (string, int, error) {
-	if c.header != nil {
-		body, statusCode, err := c.header.MakeRequestWithHeaders(rawURL, headers)
-		if c.onRequest != nil {
-			c.onRequest()
-		}
-		return body, statusCode, err
+func (c *contextHTTPClient) MakeRequestWithHeaders(rawURL string, headers map[string]string) (string, int, error) {
+	if err := c.acquire(); err != nil {
+		return "", 0, err
 	}
+	defer c.release()
 
-	body, statusCode, err := c.base.MakeRequest(rawURL)
+	body, statusCode, err := c.processor.MakeRequestWithHeadersContext(c.ctx, rawURL, headers)
 	if c.onRequest != nil {
 		c.onRequest()
 	}
 	return body, statusCode, err
 }
 
-func (sc *ScanController) wrapProgressHTTPClient(base httpclient.HTTPClientInterface, progressTracker *stats.RequestProgress) httpclient.HTTPClientInterface {
-	if base == nil || progressTracker == nil {
-		return base
+func (c *contextHTTPClient) acquire() error {
+	if c.gate == nil {
+		return nil
 	}
+	select {
+	case c.gate <- struct{}{}:
+		return nil
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
+}
 
-	client := &progressHTTPClient{
-		base:      base,
-		onRequest: progressTracker.Increment,
+func (c *contextHTTPClient) release() {
+	if c.gate != nil {
+		<-c.gate
 	}
-	if header, ok := base.(httpclient.HeaderAwareClient); ok {
-		client.header = header
-	}
-	return client
 }
 
 func (sc *ScanController) printFingerprintResultWithProgressClear(matches []*fingerprint.FingerprintMatch, response *fingerprint.HTTPResponse, formatter fingerprint.OutputFormatter, tag string) {
@@ -352,7 +347,7 @@ func (sc *ScanController) appendProbeResults(localResults []interfaces.HTTPRespo
 	return localResults
 }
 
-func (sc *ScanController) probeTargetActiveFingerprint(ctx context.Context, baseURL string, hasPathRules bool, hasIconRules bool, formatter fingerprint.OutputFormatter, probeClient httpclient.HTTPClientInterface) []interfaces.HTTPResponse {
+func (sc *ScanController) probeTargetActiveFingerprint(ctx context.Context, baseURL string, hasPathRules bool, hasIconRules bool, formatter fingerprint.OutputFormatter, progressTracker *stats.RequestProgress) []interfaces.HTTPResponse {
 	if !sc.shouldTriggerPathProbing(baseURL) {
 		logger.Debugf("目标已探测过，跳过主动探测: %s", baseURL)
 		return nil
@@ -361,9 +356,21 @@ func (sc *ScanController) probeTargetActiveFingerprint(ctx context.Context, base
 	logger.Debugf("触发主动探测: %s", baseURL)
 	sc.markHostAsProbed(baseURL)
 
-	probeTimeout := sc.requestProcessor.GetConfig().Timeout
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	probeCtx, cancel := sc.requestProcessor.WithTimeout(ctx)
 	defer cancel()
+
+	var onRequest func()
+	if progressTracker == nil {
+		onRequest = nil
+	} else {
+		onRequest = progressTracker.Increment
+	}
+	probeClient := &contextHTTPClient{
+		ctx:       probeCtx,
+		processor: sc.requestProcessor,
+		onRequest: onRequest,
+		gate:      make(chan struct{}, 1),
+	}
 
 	var localResults []interfaces.HTTPResponse
 
@@ -429,7 +436,6 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 	}
 
 	formatter := sc.fingerprintEngine.GetOutputFormatter()
-	probeClient := sc.wrapProgressHTTPClient(sc.requestProcessor, progressTracker)
 
 	jobs := make(chan string, len(uniqueTargets))
 	resultsChan := make(chan []interfaces.HTTPResponse, len(uniqueTargets))
@@ -447,7 +453,7 @@ func (sc *ScanController) performActiveProbing(ctx context.Context, targets []st
 				default:
 				}
 
-				localResults := sc.probeTargetActiveFingerprint(ctx, baseURL, hasPathRules, hasIconRules, formatter, probeClient)
+				localResults := sc.probeTargetActiveFingerprint(ctx, baseURL, hasPathRules, hasIconRules, formatter, progressTracker)
 				resultsChan <- localResults
 			}
 		}()
@@ -477,8 +483,7 @@ func (sc *ScanController) perform404PageProbing(ctx context.Context, baseURL str
 		return nil
 	}
 
-	probeTimeout := sc.requestProcessor.GetConfig().Timeout
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	probeCtx, cancel := sc.requestProcessor.WithTimeout(ctx)
 	defer cancel()
 
 	if client == nil {

@@ -47,7 +47,7 @@ func NewFingerprintAddon(engineConfig *EngineConfig) (*FingerprintAddon, error) 
 		httpClient:       nil,                   // HTTP客户端需要后续设置
 		probedHosts:      make(map[string]bool), // 初始化探测缓存
 		encodingDetector: GetEncodingDetector(), // 初始化编码检测器
-		timeout:          5 * time.Minute,       // 默认超时
+		timeout:          shared.DefaultRequestTimeout,
 	}
 
 	return addon, nil
@@ -304,9 +304,7 @@ func CreateDefaultAddon() (*FingerprintAddon, error) {
 
 // SetTimeout 设置主动探测超时时间
 func (fa *FingerprintAddon) SetTimeout(timeout time.Duration) {
-	if timeout > 0 {
-		fa.timeout = timeout
-	}
+	fa.timeout = shared.NormalizeRequestTimeout(timeout)
 }
 
 // SetCustomHeaders 设置自定义HTTP头部

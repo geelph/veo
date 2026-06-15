@@ -350,7 +350,6 @@ func validateArgs(args *CLIArgs) error {
 			return fmt.Errorf("invalid wordlist file: %v", err)
 		}
 	}
-
 	if args.Output != "" {
 		if err := validateOutputPath(args.Output); err != nil {
 			return fmt.Errorf("invalid output path: %v", err)
@@ -427,7 +426,7 @@ func applyRequestArgsToConfig(requestConfig *config.RequestConfig, args *CLIArgs
 		requestConfig.Timeout = args.Timeout
 		logger.Debugf("全局配置：超时时间设置为 %d 秒", requestConfig.Timeout)
 	} else if requestConfig.Timeout <= 0 {
-		requestConfig.Timeout = 3
+		requestConfig.Timeout = shared.DefaultRequestTimeoutSeconds
 	}
 
 	randomUA := args.RandomUA

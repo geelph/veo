@@ -7,6 +7,7 @@ import (
 
 	"veo/pkg/dirscan"
 	"veo/pkg/logger"
+	"veo/pkg/shared"
 	interfaces "veo/pkg/types"
 )
 
@@ -24,11 +25,10 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		originalFollowRedirect = cfg.FollowRedirect
 		originalMaxRedirects = cfg.MaxRedirects
 		if originalDecompress || originalFollowRedirect || originalMaxRedirects != 0 {
-			updated := *cfg
-			updated.DecompressResponse = false
-			updated.FollowRedirect = false
-			updated.MaxRedirects = 0
-			sc.requestProcessor.UpdateConfig(&updated)
+			cfg.DecompressResponse = false
+			cfg.FollowRedirect = false
+			cfg.MaxRedirects = 0
+			sc.requestProcessor.UpdateConfig(cfg)
 		}
 	}
 
@@ -37,11 +37,10 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		sc.requestProcessor.SetBatchMode(originalBatchMode)
 		if cfg := sc.requestProcessor.GetConfig(); cfg != nil {
 			if cfg.DecompressResponse != originalDecompress || cfg.FollowRedirect != originalFollowRedirect || cfg.MaxRedirects != originalMaxRedirects {
-				updated := *cfg
-				updated.DecompressResponse = originalDecompress
-				updated.FollowRedirect = originalFollowRedirect
-				updated.MaxRedirects = originalMaxRedirects
-				sc.requestProcessor.UpdateConfig(&updated)
+				cfg.DecompressResponse = originalDecompress
+				cfg.FollowRedirect = originalFollowRedirect
+				cfg.MaxRedirects = originalMaxRedirects
+				sc.requestProcessor.UpdateConfig(cfg)
 			}
 		}
 	}()
@@ -126,6 +125,7 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 		engine.SetRequestProcessor(workerProcessor)
 
 		runCtx, cancel := context.WithCancel(ctx)
+		engine.SetTimeoutStopLoss(shared.NewTimeoutStopLoss(), cancel, currentTarget)
 
 		layerScanner := func(layerTargets []string, filter *dirscan.ResponseFilter, depth int) ([]interfaces.HTTPResponse, error) {
 			tempCollector := dirscan.NewRecursionCollector(layerTargets)

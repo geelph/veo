@@ -2,6 +2,18 @@ package fingerprint
 
 import "testing"
 
+type redirectingFingerprintClient struct {
+	calls int
+}
+
+func (c *redirectingFingerprintClient) MakeRequest(rawURL string) (string, int, error) {
+	c.calls++
+	if rawURL == "http://example.com/next" {
+		return `<html><script>location.href = "/start";</script></html>`, 200, nil
+	}
+	return "ok", 200, nil
+}
+
 type staticFilterFormatter struct {
 	matchCount   int
 	noMatchCount int
@@ -40,5 +52,32 @@ func TestAnalyzeResponseStaticFileDoesNotOutputNoMatch(t *testing.T) {
 	}
 	if formatter.noMatchCount != 0 {
 		t.Fatalf("expected filtered static file to suppress no-match output, got %d", formatter.noMatchCount)
+	}
+}
+
+func TestAnalyzeResponseFollowsClientRedirectOnce(t *testing.T) {
+	engine := NewEngine(nil)
+	engine.config.EnableFiltering = false
+	engine.ruleManager.rules["match-ok"] = &FingerprintRule{
+		ID:   "match-ok",
+		Name: "match-ok",
+		DSL:  []string{"contains(body, 'ok')"},
+	}
+	engine.ruleManager.updateSnapshot()
+
+	client := &redirectingFingerprintClient{}
+	resp := &HTTPResponse{
+		URL:         "http://example.com/start",
+		StatusCode:  200,
+		ContentType: "text/html",
+		Body:        `<html><script>location.href = "/next";</script></html>`,
+	}
+
+	matches := engine.AnalyzeResponseWithClient(resp, client)
+	if len(matches) != 0 {
+		t.Fatalf("expected no match after single redirect, got %d", len(matches))
+	}
+	if client.calls != 1 {
+		t.Fatalf("expected exactly one client redirect fetch, got %d", client.calls)
 	}
 }

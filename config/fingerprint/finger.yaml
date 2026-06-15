@@ -524,7 +524,7 @@ jboss-eap:
 jeecgboot:
   dsl:
     - "contains(body, 'jeecg-boot','casPrefixUrl')"
-    - "contains_all(body, 'absolute','9999999999999','#FFF','Open Sans','load_title')"
+    - "contains(url, 'jeecg-boot')"
 
 jeecms:
   dsl:
@@ -1657,8 +1657,7 @@ REALOR瑞友天翼虚拟化系统:
 kkfileview:
   path: "/kkfileview/"
   dsl:
-    - "contains(body, 'kkview.cn','09ZHSXbsQ','kkFileView','上传的文件不能超过500MB喔！！！','daxiao.replace')"
-    - "contains(body, 'theme-showcase')"
+    - "contains(body, 'kkview.cn','09ZHSXbsQ','上传的文件不能超过500MB喔','daxiao.replace','theme-showcase')"
 
 阿里云waf:
   dsl:
@@ -1669,9 +1668,10 @@ metacrm:
     - "contains(body, 'skin/default/images/bool_yes.gif')"
 
 bladex:
+  tag: red,rce
   dsl:
     - "contains(body, 'svg/loading-spin.svg')"
-    - "contains(url, 'blade-auth')"
+    - "contains(url, 'blade-auth','blade-')"
     - "contains(body, 'bladex')"
     - "icon('/favicon.png', '952438bb6af042855ed192384032e37b')"
 
@@ -1950,10 +1950,6 @@ cmstop:
     - "contains(body, 'css/cmstop-common.css')"
     - "contains(body, 'js/cmstop-common.js')"
 
-consul-by-hashicorp:
-  dsl:
-    - "title('Consul')"
-
 douphp:
   dsl:
     - "contains(body, 'Powered by DouPHP')"
@@ -1962,9 +1958,6 @@ douphp:
 dreamer-cms:
   dsl:
     - "contains(header, 'dreamer-cms')"
-
-dreamer-cms-shiro:
-  dsl:
     - "contains(header, 'dreamer-')"
 
 e-mobile:
@@ -2055,10 +2048,6 @@ hue-大数据框架:
     - "contains(body, 'Welcome to Hue')"
     - "contains(body, 'Query. Explore.')"
 
-ibm-http-server:
-  dsl:
-    - "contains(body, 'IBM HTTP Server')"
-
 ibos酷办公oa系统:
   dsl:
     - "contains_all(body, 'login-panel','loginsubmit')"
@@ -2074,6 +2063,7 @@ influxdb:
 ip-guard:
   dsl:
     - "contains(body, 'IP-guard')"
+
 itc-cms:
   dsl:
     - "contains(body, '/mt_res_v3/js/common/common.js')"
@@ -2182,7 +2172,6 @@ sdcms神盾内容管理系统:
 spring-eureka:
   dsl:
     - "contains(body, '<title>Eureka</title>')"
-    - "contains(body, 'eureka')"
 
 tamronos-iptv系统:
   dsl:
@@ -2306,16 +2295,6 @@ yzmcms:
   dsl:
     - "contains(body, '全息AI')"
     - "contains(body, 'g_is_hk')"
-
-冰峰网络-iceflow:
-  dsl:
-    - "contains(body, 'Web 配置中心')"
-    - "contains(body, '/images/splash.jpg')"
-
-化视私云cdn直播加速服务器:
-  dsl:
-    - "contains(body, 'img/dl.gif')"
-    - "contains(body, '华视美达')"
 
 华为ar-web管理平台:
   dsl:
@@ -2667,7 +2646,6 @@ waf:
 
 网御-安全网关:
   dsl:
-    - "contains(body, '安全系统')"
     - "contains(body, '网御星云')"
 
 网神secgate-3600防火墙:
@@ -2713,12 +2691,10 @@ waf:
 
 若依:
   dsl:
-    - "contains(body, 'ruoyi')"
-    - "contains(body, '若依')"
+    - "contains(body, 'ruoyi','若依')"
     - "icon('/favicon.ico','4eeb8a8eb30b70af511dcc28c11a3216')"
     - "contains_all(body, 'ry-ui','username')"
-    - "contains(body, 'ry-ui.css')"
-    - "contains(body, 'ry-ui.js')"
+    - "contains(body, 'ry-ui.css','ry-ui.js')"
 
 蓝凌eis智慧协同平台:
   dsl:
@@ -2832,10 +2808,6 @@ waf:
     - "contains(body, 'Huilan')"
     - "contains(body, 'huilan-jquery-ui')"
 
-layui:
-  dsl:
-    - "contains(body, 'layui/layui.js')"
-
 api-docs:
   dsl:
     - "contains_all(body, 'swagger','info','paths')"
@@ -2909,6 +2881,7 @@ h3c网管系统:
 安恒明御WAF:
   dsl:
   - "contains_all(body, '权限问题或行为非法，您的访问被拒绝','Request')"
+  - "contains(header,'DBAppWAF')"
 
 ArcGIS:
   dsl:
@@ -2934,8 +2907,8 @@ React Server:
 
 疑似文件上传表单:
   dsl:
-  - "contains(body, 'enctype=\"multipart/form-data\"','input type=\"file\"','placeholder=\"请选择文件\"')"
-  - "contains(body, '请选择文件','选择多文件','选择文件','UploadFile')"
+  - "contains_all(body, 'enctype=\"multipart/form-data\"','input type=\"file\"')"
+  - "contains(body, '请选择文件','选择多文件','选择文件')"
 
 SOAP:
   dsl:
@@ -3011,5 +2984,38 @@ dify:
   path: "/jmreport/desreport_/js/core/api.js"
   tags: red,rce,jmreport
   dsl:
-  - "contains(body, 'jmreport/desreport','desreport','jmreport','JM_VIEW_IMG_URL','excelQueryByTemplate','queryMapByCodeUseOrigin')"
+  - "contains(body,'JM_VIEW_IMG_URL','excelQueryByTemplate','queryMapByCodeUseOrigin')"
 
+e签宝:
+  tags: red
+  dsl:
+    - "contains(body, 'main-login-web/static/js/app','天印电子签章','/main-index-web','/ec-manage-web','excelQueryByTemplate','queryMapByCodeUseOrigin')"
+    - "contains_all(header,'Content-Security-Policy','data-api.esign.cn')"
+
+上海汇招信息技术有限公司（易招标）电子招采平台:
+  tags: red
+  dsl:
+    - "contains(body, '/cms/default/templates/staticRes/','技术支持: 上海汇招信息技术有限公司','/cms/default/webfile/index.html','/ebidding/#/login','/ebidding/#/ls/account','/ebidding/webdocs/')"
+
+OSS文件遍历:
+  dsl:
+  - "contains_all(body, 'Contents','Key','LastModified','Size')"
+
+InforSuiteLB中创:
+  dsl:
+  - "contains(body, 'InforSuite')"
+
+金格组件:
+  path: 
+    - "/king-grid/index.jsp"
+    - "/king-grid/index.jspx"
+    - "/king-grid/index.php"
+  dsl:
+  - "contains(body, 'DBSTEP','请使用Post方法')"
+
+东方通:
+  path: 
+    - "/ejbserver/ejb"
+  dsl:
+  - "contains(header, 'webserver')"
+  - "contains(body,'com.tongweb')"
