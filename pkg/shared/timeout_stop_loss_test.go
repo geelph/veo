@@ -33,3 +33,17 @@ func TestTimeoutStopLossResetsConsecutiveTimeoutsOnSuccess(t *testing.T) {
 		t.Fatal("success should reset consecutive timeout count")
 	}
 }
+
+func TestTimeoutStopLossDoesNotTripOnIntermittentSuccess(t *testing.T) {
+	stopLoss := NewTimeoutStopLoss()
+	err := context.DeadlineExceeded
+
+	for i := 0; i < 1000; i++ {
+		if stopLoss.Record(err) {
+			t.Fatalf("intermittent timeout tripped stop loss at request %d", i*2+1)
+		}
+		if stopLoss.Record(nil) {
+			t.Fatalf("success tripped stop loss at request %d", i*2+2)
+		}
+	}
+}

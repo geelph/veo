@@ -288,7 +288,7 @@ func (e *Engine) performHTTPRequestsWithCallback(ctx context.Context, scanURLs [
 			}
 			if stopLoss.Record(err) {
 				cancelOnce.Do(func() {
-					logger.Infof("超时丢弃：%s", stopLossTarget)
+					logger.Warnf("超时丢弃：%s", stopLossTarget)
 					stopLossCancel()
 				})
 			}

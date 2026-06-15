@@ -723,7 +723,7 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 					if err != nil {
 						if stopLoss.Record(err) {
 							cancelOnce.Do(func() {
-								logger.Infof("超时丢弃：%s", baseURL)
+								logger.Warnf("超时丢弃：%s", baseURL)
 								cancel()
 							})
 						}
