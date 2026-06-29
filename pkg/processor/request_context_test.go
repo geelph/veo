@@ -141,7 +141,7 @@ func TestRequestProcessor_DropsLateResponseAfterContextDeadline(t *testing.T) {
 	if resp != nil {
 		t.Fatalf("expected late response to be dropped, got %#v", resp)
 	}
-	if !IsTimeoutOrCanceledError(err) {
+	if !IsTimeoutError(err) {
 		t.Fatalf("expected context timeout error, got %v", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestRequestProcessor_ResultHookCanCancelAfterTimeoutStopLoss(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stopLoss := shared.NewTimeoutStopLoss()
+	stopLoss := shared.NewTimeoutStopLossWithConfig(shared.TimeoutStopLossConfig{MaxConsecutiveTimeouts: 5})
 	rp.ProcessURLsWithCallbackAndResultHook(ctx, urls, nil, nil, func(resp *interfaces.HTTPResponse, err error) {
 		if resp == nil && stopLoss.Record(err) {
 			cancel()
@@ -202,7 +202,7 @@ func TestRequestProcessor_CloneWithContextRebuildsClientTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cloned processor to use shorter timeout")
 	}
-	if !IsTimeoutOrCanceledError(err) {
+	if !IsTimeoutError(err) {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 }

@@ -32,3 +32,9 @@ veo
 *.csv
 veo
 veo
+pkg/reporter/reporter_timestamp_test.go
+pkg/reporter/reporter_timestamp_test.go
+pkg/shared/timeout_stop_loss.go
+pkg/shared/timeout_stop_loss_test.go
+pkg/processor/request_context_test.go
+pkg/fingerprint/engine_static_filter_test.go

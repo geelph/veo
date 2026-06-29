@@ -338,9 +338,9 @@ func remoteIPFromAddr(addr net.Addr) string {
 func (c *Client) handleRequestError(err error) error {
 	errStr := err.Error()
 	if strings.Contains(errStr, "tls:") || strings.Contains(errStr, "x509:") {
-		return fmt.Errorf("TLS handshake failed: %v", err)
+		return fmt.Errorf("TLS handshake failed: %w", err)
 	}
-	return fmt.Errorf("request failed: %v", err)
+	return fmt.Errorf("request failed: %w", err)
 }
 
 func encodeHashInURL(rawURL string) string {

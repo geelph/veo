@@ -18,8 +18,22 @@ import (
 
 // CombinedAPIResponse 统一的API/CLI JSON响应结构
 type CombinedAPIResponse struct {
+	Stats       *CombinedStats       `json:"stats,omitempty"`
 	Fingerprint []FingerprintAPIPage `json:"fingerprint,omitempty"`
 	Dirscan     []DirscanAPIPage     `json:"dirscan,omitempty"`
+}
+
+type CombinedStats struct {
+	TotalResults int          `json:"total_results"`
+	DurationMs   int64        `json:"duration_ms"`
+	Fingerprint  *ModuleStats `json:"fingerprint,omitempty"`
+	Dirscan      *ModuleStats `json:"dirscan,omitempty"`
+}
+
+type ModuleStats struct {
+	ResultCount int   `json:"result_count"`
+	DurationMs  int64 `json:"duration_ms"`
+	MatchCount  int   `json:"match_count,omitempty"`
 }
 
 type FingerprintAPIPage struct {
@@ -93,6 +107,30 @@ func buildCombinedAPIResponse(dirPages []types.HTTPResponse, fpPages []types.HTT
 // GenerateCombinedJSON 生成合并 JSON（仅负责序列化，不做文件 IO）
 func GenerateCombinedJSON(dirPages []types.HTTPResponse, fingerprintPages []types.HTTPResponse, matches []types.FingerprintMatch) (string, error) {
 	result := buildCombinedAPIResponse(dirPages, fingerprintPages, matches)
+	return marshalCombinedAPIResponse(result)
+}
+
+func GenerateCombinedJSONWithStats(dirPages []types.HTTPResponse, fingerprintPages []types.HTTPResponse, matches []types.FingerprintMatch, stats *CombinedStats) (string, error) {
+	result := buildCombinedAPIResponse(dirPages, fingerprintPages, matches)
+	result.Stats = fillCombinedStats(stats, result)
+	return marshalCombinedAPIResponse(result)
+}
+
+func fillCombinedStats(stats *CombinedStats, result CombinedAPIResponse) *CombinedStats {
+	if stats == nil {
+		stats = &CombinedStats{}
+	}
+	stats.TotalResults = len(result.Fingerprint) + len(result.Dirscan)
+	if stats.Fingerprint != nil {
+		stats.Fingerprint.ResultCount = len(result.Fingerprint)
+	}
+	if stats.Dirscan != nil {
+		stats.Dirscan.ResultCount = len(result.Dirscan)
+	}
+	return stats
+}
+
+func marshalCombinedAPIResponse(result CombinedAPIResponse) (string, error) {
 	data, err := json.Marshal(result)
 	if err != nil {
 		return "", fmt.Errorf("JSON序列化失败: %v", err)

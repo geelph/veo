@@ -63,7 +63,7 @@ func (sc *ScanController) parseTargets(targetStrs []string) ([]string, error) {
 	var validTargets []string
 
 	if sc.args.NetworkCheck {
-		validTargets = checker.BatchCheck(uniqueTargets)
+		validTargets = checker.BatchCheck(uniqueTargets, !sc.args.JSONOutput)
 		if len(validTargets) == 0 {
 			return nil, fmt.Errorf("no reachable targets")
 		}
@@ -100,7 +100,7 @@ func NewConnectivityChecker(cfg *config.Config) *ConnectivityChecker {
 	}
 }
 
-func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
+func (cc *ConnectivityChecker) BatchCheck(targets []string, showProgress bool) []string {
 	if len(targets) == 0 {
 		return nil
 	}
@@ -125,7 +125,9 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 	var processedCount int64
 	total := len(candidates)
 
-	logger.Info("Starting target reachability check...")
+	if showProgress {
+		logger.Info("Starting target reachability check...")
+	}
 	for _, targetURL := range candidates {
 		wg.Add(1)
 		go func(urlStr string) {
@@ -142,14 +144,16 @@ func (cc *ConnectivityChecker) BatchCheck(targets []string) []string {
 			}
 
 			current := atomic.AddInt64(&processedCount, 1)
-			if total > 0 && (current%5 == 0 || current == int64(total)) {
+			if showProgress && total > 0 && (current%5 == 0 || current == int64(total)) {
 				fmt.Printf("\r存活性检测: %d/%d (%.1f%%)", current, total, float64(current)/float64(total)*100)
 			}
 		}(targetURL)
 	}
 
 	wg.Wait()
-	fmt.Println()
+	if showProgress {
+		fmt.Println()
+	}
 
 	logger.Debugf("有效目标: %d/%d", len(validTargets), len(candidates))
 	if len(validTargets) > 0 {

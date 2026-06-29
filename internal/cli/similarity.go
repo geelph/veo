@@ -101,7 +101,7 @@ func (sc *ScanController) checkSimilarTargetsWithReport(ctx context.Context, tar
 
 			resp, err := reqProcessor.RequestOnceWithHeaders(ctx, targets[idx], nil)
 			if err != nil || resp == nil {
-				res.timeout = requests.IsTimeoutOrCanceledError(err)
+				res.timeout = requests.IsTimeoutError(err)
 				results <- res
 				continue
 			}

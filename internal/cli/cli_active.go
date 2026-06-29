@@ -18,6 +18,10 @@ func Execute() {
 	displayStartupInfo(args)
 
 	if err := runActiveScanMode(args); err != nil {
+		if args.JSONOutput {
+			outputJSONError(err.Error())
+			return
+		}
 		logger.Fatalf("主动扫描失败: %v", err)
 	}
 }

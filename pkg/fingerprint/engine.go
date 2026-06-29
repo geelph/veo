@@ -47,6 +47,8 @@ type EngineConfig struct {
 	ContentTypeFilterEnabled bool            `yaml:"-"`
 	ShowSnippet              bool            `yaml:"-"`
 	OutputFormatter          OutputFormatter `yaml:"-"`
+	DisableTimeoutDrop       bool            `yaml:"-"`
+	TimeoutDropHandler       func(string)    `yaml:"-"`
 }
 
 type Engine struct {
@@ -221,6 +223,12 @@ func NewEngine(config *EngineConfig) *Engine {
 	}
 
 	return engine
+}
+
+// SetTimeoutDrop 配置主动探测超时丢弃行为。
+func (e *Engine) SetTimeoutDrop(enabled bool, handler func(string)) {
+	e.config.DisableTimeoutDrop = !enabled
+	e.config.TimeoutDropHandler = handler
 }
 
 // GetOutputFormatter 获取输出格式化器
@@ -701,7 +709,10 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 	close(taskChan)
 
 	var wg sync.WaitGroup
-	stopLoss := shared.NewTimeoutStopLoss()
+	var stopLoss *shared.TimeoutStopLoss
+	if !e.config.DisableTimeoutDrop {
+		stopLoss = shared.NewTimeoutStopLoss()
+	}
 	var cancelOnce sync.Once
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
@@ -721,15 +732,21 @@ func (e *Engine) ExecuteActiveProbing(ctx context.Context, baseURL string, httpC
 					}
 					body, statusCode, err := makeRequestWithOptionalHeaders(httpClient, tk.url, tk.headers)
 					if err != nil {
-						if stopLoss.Record(err) {
+						if stopLoss != nil && stopLoss.Record(err) {
 							cancelOnce.Do(func() {
-								logger.Warnf("超时丢弃：%s", baseURL)
+								if e.config.TimeoutDropHandler != nil {
+									e.config.TimeoutDropHandler(baseURL)
+								} else {
+									logger.Warnf("超时丢弃：%s", baseURL)
+								}
 								cancel()
 							})
 						}
 						continue
 					}
-					stopLoss.Record(nil)
+					if stopLoss != nil {
+						stopLoss.Record(nil)
+					}
 					if err := contextDoneErr(ctx); err != nil {
 						return
 					}

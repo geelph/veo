@@ -132,7 +132,7 @@ func (rp *RequestProcessor) updateProcessingStats(response *interfaces.HTTPRespo
 	if rp.statsUpdater != nil {
 		rp.statsUpdater.IncrementCompletedRequests()
 		rp.statsUpdater.IncrementErrors()
-		if reqErr != nil && rp.isTimeoutOrCanceledError(reqErr) {
+		if reqErr != nil && rp.isTimeoutError(reqErr) {
 			atomic.AddInt64(&stats.TimeoutCount, 1)
 			rp.statsUpdater.IncrementTimeouts()
 		}
@@ -415,7 +415,7 @@ func (rp *RequestProcessor) RequestOnceWithHeaders(ctx context.Context, rawURL s
 		rp.statsUpdater.IncrementCompletedRequests()
 		if err != nil {
 			rp.statsUpdater.IncrementErrors()
-			if rp.isTimeoutOrCanceledError(err) {
+			if rp.isTimeoutError(err) {
 				rp.statsUpdater.IncrementTimeouts()
 			}
 		}
@@ -448,7 +448,7 @@ func (rp *RequestProcessor) makeRequestWithHeaders(ctx context.Context, rawURL s
 	body, statusCode, respHeaders, err := rp.client.MakeRequestFullWithHeadersContext(ctx, rawURL, headers)
 	if err != nil {
 		rp.logRequestError(rawURL, err)
-		return nil, fmt.Errorf("request failed: %v", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 
 	return rp.processResponse(rawURL, statusCode, body, respHeaders, nil, startTime)
@@ -456,8 +456,10 @@ func (rp *RequestProcessor) makeRequestWithHeaders(ctx context.Context, rawURL s
 
 // logRequestError 记录请求错误日志
 func (rp *RequestProcessor) logRequestError(rawURL string, err error) {
-	if rp.isTimeoutOrCanceledError(err) {
+	if rp.isTimeoutError(err) {
 		logger.Debugf("请求超时: %s, 耗时: >%v, 错误: %v", rawURL, rp.config.Timeout, err)
+	} else if rp.isCanceledError(err) {
+		logger.Debugf("请求取消: %s, 错误: %v", rawURL, err)
 	} else if rp.isRedirectError(err) {
 		logger.Warnf("Redirect failed: %s, error: %v", rawURL, err)
 	} else {
@@ -537,14 +539,27 @@ func (rp *RequestProcessor) IsBatchMode() bool {
 	return rp.batchMode
 }
 
-// IsTimeoutOrCanceledError 判断是否为超时或取消相关的错误（对外提供）
+// IsTimeoutError 判断是否为真实超时错误。
+func IsTimeoutError(err error) bool {
+	return shared.IsTimeoutError(err)
+}
+
+// IsCanceledError 判断是否为主动取消错误。
+func IsCanceledError(err error) bool {
+	return shared.IsCanceledError(err)
+}
+
+// IsTimeoutOrCanceledError 判断是否为超时或取消相关的错误（对外兼容）。
 func IsTimeoutOrCanceledError(err error) bool {
 	return shared.IsTimeoutOrCanceledError(err)
 }
 
-// isTimeoutOrCanceledError 判断是否为超时或取消相关的错误（性能优化版）
-func (rp *RequestProcessor) isTimeoutOrCanceledError(err error) bool {
-	return IsTimeoutOrCanceledError(err)
+func (rp *RequestProcessor) isTimeoutError(err error) bool {
+	return IsTimeoutError(err)
+}
+
+func (rp *RequestProcessor) isCanceledError(err error) bool {
+	return IsCanceledError(err)
 }
 
 var (

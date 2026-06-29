@@ -34,6 +34,7 @@ type EngineConfig struct {
 	RequestTimeout   time.Duration `yaml:"request_timeout"`
 	EnableCollection bool          `yaml:"enable_collection"`
 	EnableFiltering  bool          `yaml:"enable_filtering"`
+	Quiet            bool          `yaml:"quiet"`
 	ProxyURL         string        `yaml:"proxy_url"`
 }
 
@@ -57,6 +58,7 @@ type Engine struct {
 	stopLoss         *shared.TimeoutStopLoss
 	stopLossCancel   context.CancelFunc
 	stopLossTarget   string
+	stopLossOnDrop   func(string)
 }
 
 func getDefaultConfig() *EngineConfig {
@@ -145,7 +147,7 @@ func (e *Engine) PerformScanWithFilter(ctx context.Context, collectorInstance in
 	scanLabel := buildScanLabel(collectorInstance)
 	totalRequests := int64(len(scanURLs))
 	var progressTracker *scanstats.RequestProgress
-	if scanLabel != "" && totalRequests > 0 {
+	if scanLabel != "" && totalRequests > 0 && !e.config.Quiet {
 		showProgress := true
 		if processor := e.getOrCreateRequestProcessor(); processor != nil {
 			if updater := processor.GetStatsUpdater(); updater != nil {
@@ -276,6 +278,7 @@ func (e *Engine) performHTTPRequestsWithCallback(ctx context.Context, scanURLs [
 	stopLoss := e.stopLoss
 	stopLossCancel := e.stopLossCancel
 	stopLossTarget := e.stopLossTarget
+	stopLossOnDrop := e.stopLossOnDrop
 	e.mu.RUnlock()
 
 	var onResult requests.ProcessResultHook
@@ -288,7 +291,11 @@ func (e *Engine) performHTTPRequestsWithCallback(ctx context.Context, scanURLs [
 			}
 			if stopLoss.Record(err) {
 				cancelOnce.Do(func() {
-					logger.Warnf("超时丢弃：%s", stopLossTarget)
+					if stopLossOnDrop != nil {
+						stopLossOnDrop(stopLossTarget)
+					} else {
+						logger.Warnf("超时丢弃：%s", stopLossTarget)
+					}
 					stopLossCancel()
 				})
 			}
@@ -333,13 +340,17 @@ func (e *Engine) SetRequestProcessor(processor *requests.RequestProcessor) {
 	e.mu.Unlock()
 }
 
-func (e *Engine) SetTimeoutStopLoss(stopLoss *shared.TimeoutStopLoss, cancel context.CancelFunc, target string) {
+func (e *Engine) SetTimeoutStopLoss(stopLoss *shared.TimeoutStopLoss, cancel context.CancelFunc, target string, onDrop ...func(string)) {
 	e.mu.Lock()
 	e.stopLoss = stopLoss
 	e.stopLossCancel = cancel
 	e.stopLossTarget = strings.TrimSpace(target)
 	if e.stopLossTarget == "" {
 		e.stopLossTarget = "unknown"
+	}
+	e.stopLossOnDrop = nil
+	if len(onDrop) > 0 {
+		e.stopLossOnDrop = onDrop[0]
 	}
 	e.mu.Unlock()
 }

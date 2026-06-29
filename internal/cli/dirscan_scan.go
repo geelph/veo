@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 
@@ -49,7 +50,9 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 	if strings.TrimSpace(sc.wordlistPath) != "" {
 		dictInfo = sc.wordlistPath
 	}
-	logger.Infof("Start Dirscan, Loaded Dict: %s", dictInfo)
+	if sc.args == nil || !sc.args.JSONOutput {
+		logger.Infof("Start Dirscan, Loaded Dict: %s", dictInfo)
+	}
 
 	validTargets := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -121,11 +124,14 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 			MaxConcurrency: perTargetConcurrent,
 			RequestTimeout: workerCfg.Timeout,
 			ProxyURL:       workerCfg.ProxyURL,
+			Quiet:          sc.args != nil && sc.args.JSONOutput,
 		})
 		engine.SetRequestProcessor(workerProcessor)
 
 		runCtx, cancel := context.WithCancel(ctx)
-		engine.SetTimeoutStopLoss(shared.NewTimeoutStopLoss(), cancel, currentTarget)
+		if sc.timeoutDropEnabled() {
+			engine.SetTimeoutStopLoss(shared.NewTimeoutStopLoss(), cancel, currentTarget, sc.recordDroppedTarget)
+		}
 
 		layerScanner := func(layerTargets []string, filter *dirscan.ResponseFilter, depth int) ([]interfaces.HTTPResponse, error) {
 			tempCollector := dirscan.NewRecursionCollector(layerTargets)
@@ -133,6 +139,9 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 			recursive := depth > 0
 			scanResult, err := engine.PerformScanWithFilter(runCtx, tempCollector, recursive, filter)
 			if err != nil {
+				if sc.args != nil && sc.args.JSONOutput && errors.Is(err, dirscan.ErrNoValidHTTPResponse) {
+					return nil, nil
+				}
 				return nil, err
 			}
 			if scanResult == nil || scanResult.FilterResult == nil {
@@ -206,7 +215,9 @@ func (sc *ScanController) runDirscanModule(ctx context.Context, targets []string
 			if firstErr == nil {
 				firstErr = err
 			}
-			logger.Warnf("Dirscan failed for target %s: %v", currentTarget, err)
+			if sc.args == nil || !sc.args.JSONOutput {
+				logger.Warnf("Dirscan failed for target %s: %v", currentTarget, err)
+			}
 			continue
 		}
 

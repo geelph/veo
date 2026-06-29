@@ -1,6 +1,9 @@
 package fingerprint
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 type redirectingFingerprintClient struct {
 	calls int
@@ -79,5 +82,41 @@ func TestAnalyzeResponseFollowsClientRedirectOnce(t *testing.T) {
 	}
 	if client.calls != 1 {
 		t.Fatalf("expected exactly one client redirect fetch, got %d", client.calls)
+	}
+}
+
+type failingFingerprintClient struct {
+	calls int
+}
+
+func (c *failingFingerprintClient) MakeRequest(rawURL string) (string, int, error) {
+	c.calls++
+	return "", 0, context.DeadlineExceeded
+}
+
+func TestExecuteActiveProbingCanDisableTimeoutDrop(t *testing.T) {
+	engine := NewEngine(nil)
+	engine.config.MaxConcurrency = 1
+	engine.SetTimeoutDrop(false, func(string) {
+		t.Fatal("timeout drop handler should not be called when disabled")
+	})
+	engine.ruleManager.rules["path-rule"] = &FingerprintRule{
+		ID:    "path-rule",
+		Name:  "path-rule",
+		DSL:   []string{"contains(body, 'ok')"},
+		Paths: []string{"/a", "/b", "/c"},
+	}
+	engine.ruleManager.updateSnapshot()
+
+	client := &failingFingerprintClient{}
+	results, err := engine.ExecuteActiveProbing(context.Background(), "http://example.com", client)
+	if err != nil {
+		t.Fatalf("ExecuteActiveProbing failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results, got %d", len(results))
+	}
+	if client.calls != 3 {
+		t.Fatalf("drop disabled should process all tasks, calls = %d, want 3", client.calls)
 	}
 }

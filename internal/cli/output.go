@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"veo/pkg/fingerprint"
 	"veo/pkg/formatter"
@@ -15,6 +17,15 @@ import (
 
 func isJSONReportPath(path string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(path)), ".json")
+}
+
+func outputJSONError(message string) {
+	data, err := json.Marshal(map[string]string{"error": message})
+	if err != nil {
+		fmt.Println(`{"error":"internal json error"}`)
+		return
+	}
+	fmt.Println(string(data))
 }
 
 func shouldUseRealtimeCSVReport(path string) bool {
@@ -73,25 +84,47 @@ func (sc *ScanController) attachRealtimeReporter() {
 
 func (sc *ScanController) finalizeScan(allResults, dirResults, fingerprintResults []interfaces.HTTPResponse) error {
 	logger.Debugf("所有模块执行完成，总结果数: %d", len(allResults))
+	if !sc.scanStartedAt.IsZero() {
+		sc.scanDuration = time.Since(sc.scanStartedAt)
+	}
 
 	filterResult := sc.buildFilterResult(allResults, fingerprintResults)
 
 	sc.lastDirscanResults = dirResults
 	sc.lastFingerprintResults = fingerprintResults
 
-	if sc.realtimeReporter != nil {
+	quiet := sc.args != nil && sc.args.JSONOutput
+
+	if sc.realtimeReporter != nil && !quiet {
 		logger.Infof("Report Output Success: %s", sc.realtimeReporter.Path())
 	}
 
-	if sc.statsDisplay.IsEnabled() {
+	if sc.statsDisplay.IsEnabled() && !quiet {
 		sc.statsDisplay.ShowFinalStats()
 		sc.statsDisplay.Disable()
+	} else if quiet {
+		sc.statsDisplay.Disable()
+	}
+
+	if !quiet {
+		sc.outputDroppedTargetSummary()
 	}
 
 	sc.outputConsoleJSON(dirResults, fingerprintResults, filterResult)
 	sc.outputJSONReport(dirResults, fingerprintResults, filterResult)
 
 	return nil
+}
+
+func (sc *ScanController) outputDroppedTargetSummary() {
+	targets := sc.droppedTargetList()
+	if len(targets) == 0 {
+		return
+	}
+	logger.Warnf("超时丢弃目标: %d", len(targets))
+	for _, target := range targets {
+		logger.Warnf("超时丢弃：%s", target)
+	}
 }
 
 func (sc *ScanController) buildFilterResult(allResults, fingerprintResults []interfaces.HTTPResponse) *interfaces.FilterResult {
@@ -146,7 +179,9 @@ func (sc *ScanController) outputJSONReport(dirResults, fingerprintResults []inte
 		logger.Errorf("Failed to write JSON report: %v", writeErr)
 		return
 	}
-	logger.Infof("Report Output Success: %s", sc.reportPath)
+	if sc.args == nil || !sc.args.JSONOutput {
+		logger.Infof("Report Output Success: %s", sc.reportPath)
+	}
 }
 
 func (sc *ScanController) generateJSONReport(dirPages, fingerprintPages []interfaces.HTTPResponse, filterResult *interfaces.FilterResult) (string, error) {
@@ -173,7 +208,35 @@ func (sc *ScanController) generateJSON(dirPages, fingerprintPages []interfaces.H
 		fingerprintPages = toValueSlice(filterResult.ValidPages)
 	}
 
-	return reporter.GenerateCombinedJSON(dirPages, fingerprintPages, matches)
+	return reporter.GenerateCombinedJSONWithStats(dirPages, fingerprintPages, matches, sc.buildJSONStats(matches))
+}
+
+func (sc *ScanController) buildJSONStats(matches []interfaces.FingerprintMatch) *reporter.CombinedStats {
+	stats := &reporter.CombinedStats{
+		DurationMs: durationMillis(sc.scanDuration),
+	}
+	if sc.args == nil {
+		return stats
+	}
+	if sc.args.HasModule(moduleFinger) {
+		stats.Fingerprint = &reporter.ModuleStats{
+			DurationMs: durationMillis(sc.moduleDurations[moduleFinger]),
+			MatchCount: len(matches),
+		}
+	}
+	if sc.args.HasModule(moduleDirscan) {
+		stats.Dirscan = &reporter.ModuleStats{
+			DurationMs: durationMillis(sc.moduleDurations[moduleDirscan]),
+		}
+	}
+	return stats
+}
+
+func durationMillis(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return d.Milliseconds()
 }
 
 func convertFingerprintMatches(matches []*fingerprint.FingerprintMatch, includeSnippet bool) []interfaces.FingerprintMatch {

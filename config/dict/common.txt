@@ -598,6 +598,10 @@
 /image/upload
 /kindeditor/asp/upload_json.asp
 /layui_upload.php
+/resource/ueditor/net/1.4.3/controller.ashx?action=catchimage&encode=utf-8
+/resource//ueditor/net/controller.ashx?action=catchimage&encode=utf-8
+/ueditor/net/controller.ashx?action=catchimage&encode=utf-8
+/ueditor/net/1.4.3/controller.ashx?action=catchimage&encode=utf-8
 /lib/ueditor/1.4.3/net/controller.ashx?action=catchimage&encode=utf-8
 /manager/ueditor/1.4.3/net/controller.ashx?action=catchimage&encode=utf-8
 /manager/ueditor/net/controller.ashx?action=catchimage&encode=utf-8

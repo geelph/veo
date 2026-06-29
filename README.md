@@ -175,7 +175,7 @@
   5、优化404探测指纹显示方式，统一进行指纹显示的合并。
   6、新增execl报告输出。
   7、新增-nc参数：取消控制台颜色输出，防止windows系统下乱码的情况。
-  8、新增--json参数：控制台输出结果变为纯json结果输出，方便其他工具接收输出作为第三方工具的输入。
+  8、新增-j参数：控制台输出结果变为纯json结果输出，方便其他工具接收输出作为第三方工具的输入。
   ```
 
   
@@ -230,7 +230,7 @@
 ./veo -u http://target.com --header "Authorization: Bearer token123" --header "X-API-Key: key456"
 
 # 控制台输出 JSON 格式（配合管道使用）
-./veo -u http://target.com --json
+./veo -u http://target.com -j
 
 # 更新指纹识别规则库
 ./veo --update-rules
@@ -263,8 +263,9 @@
 | `-v` | `false` | 显示指纹匹配规则内容（不含片段）。 | `-v` |
 | `-vv` | `false` | 显示指纹匹配规则及匹配片段详情。 | `-vv` |
 | `-np`, `--no-probe` | `false` | 禁用主动目录指纹识别与404探测（仅指纹模块生效）。 | `--no-probe` |
+| `--drop` | `true` | 启用超时丢弃机制；关闭可用 `--drop=false`。 | `--drop=false` |
 | `-nc`, `--no-color` | `false` | 禁用彩色输出，适用于不支持 ANSI 的终端。 | `--no-color` |
-| `--json` | `false` | 控制台结果以 JSON 输出。 | `--json` |
+| `-j` | `false` | 控制台结果以 JSON 输出。 | `-j` |
 | `-nc` | `false` | 启用存活性检测 (默认关闭)。 | `-nc` |
 | `-ua` | `false` | 是否启用随机User-Agent池，可通过 `-ua=true` 开启。 | `-ua=true` |
 
@@ -288,7 +289,7 @@
 | 参数 | 默认值 | 说明 | 示例 |
 |------|--------|------|------|
 | `-o`, `--output` | — | 结果输出到文件，输出为 `<path>`。 | `-o report` |
-| `--json` | `false` | 控制台输出 JSON，便于与其他工具集成。 | `--json` |
+| `-j` | `false` | 控制台输出 JSON，便于与其他工具集成。 | `-j` |
 
 ## HTTP 与过滤
 

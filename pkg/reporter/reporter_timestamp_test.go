@@ -75,6 +75,43 @@ func TestGenerateCombinedJSONUsesMatchTimestampWhenNoPage(t *testing.T) {
 	}
 }
 
+func TestGenerateCombinedJSONWithStats(t *testing.T) {
+	dirPages := []types.HTTPResponse{{URL: "http://example.com/admin", StatusCode: 200}}
+	fpPages := []types.HTTPResponse{{URL: "http://example.com", StatusCode: 200}}
+	matches := []types.FingerprintMatch{{URL: "http://example.com", RuleName: "test-rule"}}
+
+	jsonStr, err := GenerateCombinedJSONWithStats(dirPages, fpPages, matches, &CombinedStats{
+		DurationMs: 1234,
+		Fingerprint: &ModuleStats{
+			DurationMs: 100,
+			MatchCount: 1,
+		},
+		Dirscan: &ModuleStats{
+			DurationMs: 200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateCombinedJSONWithStats failed: %v", err)
+	}
+
+	var got CombinedAPIResponse
+	if err := json.Unmarshal([]byte(jsonStr), &got); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+	if got.Stats == nil {
+		t.Fatal("expected stats")
+	}
+	if got.Stats.TotalResults != 2 || got.Stats.DurationMs != 1234 {
+		t.Fatalf("unexpected total stats: %+v", got.Stats)
+	}
+	if got.Stats.Fingerprint == nil || got.Stats.Fingerprint.ResultCount != 1 || got.Stats.Fingerprint.MatchCount != 1 {
+		t.Fatalf("unexpected fingerprint stats: %+v", got.Stats.Fingerprint)
+	}
+	if got.Stats.Dirscan == nil || got.Stats.Dirscan.ResultCount != 1 {
+		t.Fatalf("unexpected dirscan stats: %+v", got.Stats.Dirscan)
+	}
+}
+
 func TestRealtimeCSVReporterWritesTimestampColumn(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "result.csv")

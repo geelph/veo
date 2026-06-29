@@ -42,12 +42,14 @@ type CLIArgs struct {
 	NetworkCheck     bool // 启用存活性检测 (--check-alive)
 	CheckSimilar     bool // 扫描前进行目标相似性检查 (--check-similar)
 	CheckSimilarOnly bool // 仅执行相似性检查 (--check-similar-only)
-	JSONOutput       bool // 控制台输出JSON结果 (--json)
+	JSONOutput       bool // 控制台输出JSON结果 (-j)
 	Shiro            bool // Shiro rememberMe测试 (--shiro)
 
 	Verbose     bool // 指纹匹配规则展示开关 (-v)
 	VeryVerbose bool // 指纹匹配内容展示开关 (-vv)
 	NoProbe     bool // 禁用主动目录指纹识别与404探测 (-np, --no-probe)
+	Drop        bool // 启用超时丢弃机制 (--drop)
+	DropSet     bool // 仅当用户通过CLI传入 --drop 时为 true
 
 	Headers []string // 自定义HTTP认证头部 (--header "Header-Name: Header-Value")
 
@@ -66,7 +68,9 @@ type CLIArgs struct {
 
 func bootstrapCLI() *CLIArgs {
 	if err := config.InitConfig(); err != nil {
-		fmt.Printf("配置文件加载失败，使用默认配置: %v\n", err)
+		if !jsonFlagProvided() {
+			fmt.Printf("配置文件加载失败，使用默认配置: %v\n", err)
+		}
 	}
 
 	loggerConfig := &logger.LogConfig{
@@ -119,11 +123,12 @@ func ParseCLIArgs() *CLIArgs {
 		veryVerbose      = flag.Bool("vv", false, "显示指纹匹配规则与内容片段 (默认关闭，可使用 -vv 开启)")
 		noProbe          = flag.Bool("np", false, "禁用主动目录指纹识别与404探测 (默认开启)")
 		noProbeLong      = flag.Bool("no-probe", false, "禁用主动目录指纹识别与404探测 (默认开启)")
+		drop             = flag.Bool("drop", true, "启用超时丢弃机制，可使用 --drop=false 关闭 (默认开启)")
 		noColor          = flag.Bool("no-color", false, "禁用彩色输出，适用于控制台不支持ANSI的环境")
 		networkCheck     = flag.Bool("check-alive", false, "启用存活性检测 (默认关闭)")
 		checkSimilar     = flag.Bool("check-similar", false, "扫描前进行目标相似性检查并去重 (默认关闭)")
 		checkSimilarOnly = flag.Bool("check-similar-only", false, "仅执行相似性检查，不进行指纹识别和目录扫描 (默认关闭)")
-		jsonOutput       = flag.Bool("json", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
+		jsonOutput       = flag.Bool("j", false, "使用JSON格式输出扫描结果，便于与其他工具集成")
 		shiro            = flag.Bool("shiro", false, "在指纹识别/目录扫描请求头中添加 Cookie: rememberMe=1 (默认关闭)")
 
 		statusCodes = flag.String("s", "", "指定需要保留的HTTP状态码，逗号分隔 (例如: -s 200,301,302)")
@@ -165,6 +170,8 @@ func ParseCLIArgs() *CLIArgs {
 		Verbose:          *verbose,
 		VeryVerbose:      *veryVerbose,
 		NoProbe:          *noProbe || *noProbeLong,
+		Drop:             *drop,
+		DropSet:          flagProvided("drop"),
 		NoColor:          *noColor,
 		NetworkCheck:     *networkCheck,
 		CheckSimilar:     *checkSimilar,
@@ -227,73 +234,56 @@ func flagProvided(name string) bool {
 	return false
 }
 
+func jsonFlagProvided() bool {
+	return flagProvided("j")
+}
+
 // showCustomHelp 显示自定义帮助信息
 func showCustomHelp() {
 	prog := filepath.Base(os.Args[0])
+	listenUsage := ""
 	listenHelp := ""
-	listenExample := ""
 	if passiveBuild {
-		listenHelp = "  --listen          启用被动代理模式\n  -lp int           被动代理监听端口 (默认: 9080)\n"
-		listenExample = fmt.Sprintf(
-			"  %s -u target.com --listen --lp 8080\n  %s -u *.baidu.com --listen --lp 8080\n  %s -u 10.0.0.* --listen --lp 8080\n",
-			prog,
-			prog,
-			prog,
-		)
+		listenUsage = " [--listen] [--lp <port>]"
+		listenHelp = "  --listen          Enable passive proxy mode\n  --lp <port>       Passive proxy listen port, default 9080\n"
 	}
 
-	fmt.Printf(`
-veo - 指纹识别/目录扫描
+	fmt.Printf(`Usage: %[1]s -u <targets> [-m <modules>] [-w <wordlists>] [--timeout <sec>] [--retry <n>] [-t|--threads <workers>] [-o|--output <file>] [-j]%[2]s
+       %[1]s -l <file> [-m <modules>] [flags]%[2]s
+       %[1]s --update-rules
 
-用法:
-  %[1]s -u <targets> [options]
-  %[1]s -l <file> [options]
-%s
-目标与模块:
-  -u string          目标列表，逗号分隔；支持 URL / 域名 / host:port / CIDR / IP 范围；被动模式额外支持通配主机，如 *.baidu.com、10.0.0.*
-  -l string          目标文件，每行一个目标；支持空行和 # 注释
-  -m string          启用模块，默认 finger,dirscan。可选 finger / dirscan
-
-扫描控制:
-  --debug            输出调试日志
-  --stats            显示实时统计信息
-  -v                 显示指纹匹配规则内容
-  -vv                显示指纹匹配规则及匹配片段
-  -np, --no-probe    禁用主动目录指纹识别与404探测
-  --check-alive      启用存活性检测 (默认关闭)
-  --check-similar    扫描前进行目标相似性检查并去重 (默认关闭)
-  --check-similar-only 仅执行相似性检查，不进行指纹识别和目录扫描 (默认关闭)
-  --shiro            在指纹识别/目录扫描请求头中添加 Cookie: rememberMe=1 (默认关闭)
-  --no-color         禁用彩色输出
-  --json             控制台输出 JSON
-  --proxy string     上游代理地址（HTTP/SOCKS5），例如 http://127.0.0.1:8080 或 socks5://127.0.0.1:1080
-  -ua bool           是否启用随机User-Agent 池 (默认 false，使用 -ua=true 开启)
-
-性能调优:
-  -t, --threads int  全局并发线程数（默认 100）
-  --retry int        失败重试次数（默认 1）
-  --timeout int      全局超时时间（秒，默认 3）
-
-目录扫描:
-  -w string          指定自定义目录字典，可用逗号添加多个
-  --depth int        递归目录扫描深度 (0 表示关闭递归，默认: 0)
-  --no-filter        完全禁用目录扫描哈希过滤（默认开启）
-
-输出与过滤:
-  -o, --output string  写入实时CSV报告（输出为 <path>）
-  --header string      自定义 HTTP 头部，可重复指定
-  -s string            保留的 HTTP 状态码列表
-  --update-rules       从云端更新指纹识别规则库
-
-帮助:
-  -h, --help         显示本帮助信息
-
-示例:
-  %[1]s -u https://target.com -m finger,dirscan
-  %[1]s -u https://target.com --proxy http://127.0.0.1:8080
-  %[1]s -l targets.txt -m finger,dirscan --stats
-%s
-`, prog, listenHelp, listenExample)
+Flags:
+  -u <targets>      Comma-separated URLs, domains, IPs, CIDRs, or host:port
+  -l <file>         Read targets from file, one per line
+  -m <modules>      Modules to run: finger,dirscan; default finger,dirscan
+%[3]s  -w <wordlists>    Dirscan wordlist path(s), comma-separated
+  --depth <n>       Recursive dirscan depth, default 0
+  -s <codes>        Keep HTTP status codes, e.g. 200,301,302
+  --timeout <sec>   Request timeout for all modules, default 3
+  -t, --threads <n> Worker count, default 100
+  --retry <n>       Retry count for failed requests, default 1
+  --proxy <url>     Upstream proxy, e.g. http://127.0.0.1:8080 or socks5://127.0.0.1:1080
+  --header <header> Add HTTP header, repeatable
+  --check-alive     Enable alive check before scan
+  --check-similar   Deduplicate similar targets before scan
+  --check-similar-only
+                    Only run similar-target check
+  -np, --no-probe   Disable active path/icon/404 fingerprint probing
+  --drop[=false]    Enable timeout drop for abnormal targets, default true
+  --no-filter       Disable dirscan hash filtering
+  --shiro           Add Cookie: rememberMe=1
+  --stats           Show live scan stats
+  -v                Show matched fingerprint rule
+  -vv               Show matched rule and snippet
+  -j                Output JSON
+  -o, --output <file>
+                    Write realtime CSV report to file
+  --no-color        Disable ANSI color
+  --debug           Enable debug logs
+  -ua               Enable random User-Agent
+  --update-rules    Update fingerprint rules
+  -h, --help        Show help
+`, prog, listenUsage, listenHelp)
 }
 
 // validateArgs 验证CLI参数
@@ -395,15 +385,16 @@ func validateTargets(targets []string) error {
 }
 
 func applyLogLevel(args *CLIArgs) {
+	if args.JSONOutput {
+		logger.SetLogLevel("error")
+		return
+	}
+
 	if args.Debug {
 		logger.SetLogLevel("debug")
 		logger.Debug("调试模式已启用，显示所有级别日志")
 	} else {
 		logger.SetLogLevel("info")
-	}
-
-	if args.JSONOutput && !args.Debug {
-		logger.SetLogLevel("error")
 	}
 }
 
@@ -483,14 +474,18 @@ func applyArgsToConfig(args *CLIArgs) {
 		} else if len(statusCodes) > 0 {
 			customFilterConfig = ensureFilterConfig(customFilterConfig)
 			customFilterConfig.ValidStatusCodes = statusCodes
-			logger.Infof("Status code filter set to %v", statusCodes)
+			if !args.JSONOutput {
+				logger.Infof("Status code filter set to %v", statusCodes)
+			}
 		}
 	}
 
 	if args.DisableHashFilter {
 		customFilterConfig = ensureFilterConfig(customFilterConfig)
 		customFilterConfig.DisableHashFilter = true
-		logger.Warn("CLI option: dirscan hash filtering disabled (--no-filter)")
+		if !args.JSONOutput {
+			logger.Warn("CLI option: dirscan hash filtering disabled (--no-filter)")
+		}
 	}
 
 	if customFilterConfig != nil {
@@ -509,7 +504,9 @@ func applyArgsToConfig(args *CLIArgs) {
 	if args.Wordlist != "" {
 		wordlists := parseWordlistPaths(args.Wordlist)
 		dirscan.SetWordlistPaths(wordlists)
-		logger.Infof("Use Dicts: %s", strings.Join(wordlists, ","))
+		if !args.JSONOutput {
+			logger.Infof("Use Dicts: %s", strings.Join(wordlists, ","))
+		}
 	} else {
 		dirscan.SetWordlistPaths(nil)
 	}
@@ -517,7 +514,9 @@ func applyArgsToConfig(args *CLIArgs) {
 	if args.Proxy != "" {
 		proxyConfig := config.GetProxyConfig()
 		proxyConfig.UpstreamProxy = args.Proxy
-		logger.Infof("UpstreamProxy: %s", args.Proxy)
+		if !args.JSONOutput {
+			logger.Infof("UpstreamProxy: %s", args.Proxy)
+		}
 	}
 
 	if collectorCfg := config.GetCollectorConfig(); collectorCfg != nil {

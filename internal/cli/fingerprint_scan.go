@@ -64,16 +64,18 @@ func (sc *ScanController) runFingerprintModuleWithContext(ctx context.Context, t
 		}
 	}()
 
-	fmt.Println()
-	if sc.fingerprintEngine != nil {
-		summary := sc.fingerprintEngine.GetLoadedSummaryString()
-		if summary != "" {
-			logger.Infof("Start FingerPrint, Loaded FingerPrint Rules: %s", summary)
+	if sc.args == nil || !sc.args.JSONOutput {
+		fmt.Println()
+		if sc.fingerprintEngine != nil {
+			summary := sc.fingerprintEngine.GetLoadedSummaryString()
+			if summary != "" {
+				logger.Infof("Start FingerPrint, Loaded FingerPrint Rules: %s", summary)
+			} else {
+				logger.Infof("Start FingerPrint")
+			}
 		} else {
 			logger.Infof("Start FingerPrint")
 		}
-	} else {
-		logger.Infof("Start FingerPrint")
 	}
 	logger.Debugf("开始指纹识别，数量: %d", len(targets))
 
@@ -198,7 +200,9 @@ func (sc *ScanController) runConcurrentFingerprintWithContext(parentCtx context.
 func (sc *ScanController) processSingleTargetFingerprintWithContext(ctx context.Context, target string, progressTracker *stats.RequestProgress) (results []interfaces.HTTPResponse) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Errorf("Fingerprint panic: %v, target: %s", r, target)
+			if sc.args == nil || !sc.args.JSONOutput {
+				logger.Errorf("Fingerprint panic: %v, target: %s", r, target)
+			}
 			results = nil
 		}
 	}()

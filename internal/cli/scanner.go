@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"veo/internal/config"
 	"veo/pkg/fingerprint"
@@ -32,6 +34,9 @@ type ScanController struct {
 
 	lastDirscanResults     []interfaces.HTTPResponse
 	lastFingerprintResults []interfaces.HTTPResponse
+	scanStartedAt          time.Time
+	scanDuration           time.Duration
+	moduleDurations        map[string]time.Duration
 
 	displayedURLs   map[string]bool
 	displayedURLsMu sync.Mutex
@@ -39,6 +44,9 @@ type ScanController struct {
 	collectedPrimaryFiltered []interfaces.HTTPResponse
 	collectedStatusFiltered  []interfaces.HTTPResponse
 	collectedResultsMu       sync.Mutex
+
+	droppedTargetsMu sync.Mutex
+	droppedTargets   map[string]struct{}
 }
 
 func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
@@ -119,10 +127,51 @@ func NewScanController(args *CLIArgs, cfg *config.Config) *ScanController {
 		showFingerprintSnippet: snippetEnabled,
 		reportPath:             strings.TrimSpace(args.Output),
 		wordlistPath:           strings.TrimSpace(args.Wordlist),
+		moduleDurations:        make(map[string]time.Duration),
 		displayedURLs:          make(map[string]bool),
+		droppedTargets:         make(map[string]struct{}),
+	}
+	if sc.fingerprintEngine != nil {
+		sc.fingerprintEngine.SetTimeoutDrop(sc.timeoutDropEnabled(), sc.recordDroppedTarget)
 	}
 
 	return sc
+}
+
+func (sc *ScanController) timeoutDropEnabled() bool {
+	if sc.args == nil {
+		return true
+	}
+	return !sc.args.DropSet || sc.args.Drop
+}
+
+func (sc *ScanController) recordDroppedTarget(target string) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+
+	sc.droppedTargetsMu.Lock()
+	defer sc.droppedTargetsMu.Unlock()
+	if sc.droppedTargets == nil {
+		sc.droppedTargets = make(map[string]struct{})
+	}
+	sc.droppedTargets[target] = struct{}{}
+}
+
+func (sc *ScanController) droppedTargetList() []string {
+	sc.droppedTargetsMu.Lock()
+	defer sc.droppedTargetsMu.Unlock()
+	if len(sc.droppedTargets) == 0 {
+		return nil
+	}
+
+	targets := make([]string, 0, len(sc.droppedTargets))
+	for target := range sc.droppedTargets {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	return targets
 }
 
 func (sc *ScanController) Run() error {
@@ -160,6 +209,7 @@ func (sc *ScanController) runActiveMode() error {
 	logger.Debugf("解析到 %d 个目标", len(targets))
 
 	orderedModules := sc.getOptimizedModuleOrder()
+	sc.scanStartedAt = time.Now()
 
 	// 信号处理：捕获 Ctrl+C / SIGTERM，通过 ctx 取消让各模块尽快收敛
 	ctx, cancel := context.WithCancel(context.Background())
@@ -218,9 +268,13 @@ func (sc *ScanController) executeModulesSequenceWithContext(ctx context.Context,
 
 		logger.Debugf("开始执行模块: %s (%d/%d)", moduleName, i+1, len(modules))
 
+		startedAt := time.Now()
 		moduleResults, err := sc.runModuleForTargetsWithContext(ctx, moduleName, targets)
+		sc.moduleDurations[moduleName] = time.Since(startedAt)
 		if err != nil {
-			logger.Errorf("Module %s execution failed: %v", moduleName, err)
+			if sc.args == nil || !sc.args.JSONOutput {
+				logger.Errorf("Module %s execution failed: %v", moduleName, err)
+			}
 			continue
 		}
 

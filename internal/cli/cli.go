@@ -35,16 +35,28 @@ func Execute() {
 
 	app, err := initializeApp(args)
 	if err != nil {
+		if args.JSONOutput {
+			outputJSONError(err.Error())
+			return
+		}
 		logger.Fatalf("初始化应用程序失败: %v", err)
 	}
 
 	if args.Listen {
 		if err := app.startApplication(); err != nil {
+			if args.JSONOutput {
+				outputJSONError(err.Error())
+				return
+			}
 			logger.Fatalf("启动应用程序失败: %v", err)
 		}
 		waitForSignal(app)
 	} else {
 		if err := runActiveScanMode(args); err != nil {
+			if args.JSONOutput {
+				outputJSONError(err.Error())
+				return
+			}
 			logger.Fatalf("主动扫描失败: %v", err)
 		}
 	}
@@ -375,7 +387,11 @@ func (app *CLIApp) triggerScan() {
 	}
 
 	logger.Info("Starting dirscan...")
+	controller.scanStartedAt = time.Now()
+	startedAt := time.Now()
 	result, err := controller.runDirscanModule(context.Background(), collectedURLs)
+	controller.scanDuration = time.Since(controller.scanStartedAt)
+	controller.moduleDurations[moduleDirscan] = time.Since(startedAt)
 	if err != nil {
 		logger.Errorf("Scan execution failed: %v", err)
 	} else {

@@ -114,9 +114,13 @@ func runCheckSimilarOnlyMode(args *CLIArgs) error {
 }
 
 func displayStartupInfo(args *CLIArgs) {
+	if args != nil && args.JSONOutput {
+		return
+	}
+
 	fmt.Print(`
-		veo@Evilc0de
-`)
+			veo@Evilc0de
+	`)
 
 	if args != nil && args.CheckSimilarOnly {
 		return
